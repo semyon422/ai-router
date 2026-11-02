@@ -1,0 +1,9 @@
+bin/
+tree/
+userdata/
+server-state/
+temp/
+luacov.stats.out
+lcov.info
+luacov.report.out
+.deploy.lock

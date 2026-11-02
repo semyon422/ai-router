@@ -1,0 +1,52 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Full commit SHA to deploy
+        required: false
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_HOST_KEY" > ~/.ssh/known_hosts
+
+      - name: Deploy on VDS
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          REQUESTED_COMMIT: ${{ inputs.commit || github.sha }}
+        run: |
+          if [[ ! "$REQUESTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "commit must be a full lowercase SHA" >&2
+            exit 2
+          fi
+          if [[ -z "$DEPLOY_HOST" || -z "$DEPLOY_USER" ]]; then
+            echo "DEPLOY_HOST and DEPLOY_USER production secrets must be configured" >&2
+            exit 2
+          fi
+          ssh -i ~/.ssh/deploy_key -o ServerAliveInterval=30 -o ServerAliveCountMax=10 "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- "$REQUESTED_COMMIT" <<'REMOTE'
+          set -euo pipefail
+          cd /home/semyon422/ai-router
+          exec 9>.deploy.lock
+          flock --wait 7200 9
+          ./deploy.sh "$1"
+          REMOTE

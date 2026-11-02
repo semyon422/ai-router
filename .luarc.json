@@ -1,0 +1,27 @@
+{
+	"$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+	"runtime.version": "LuaJIT",
+	"runtime.path": [
+		"?.lua",
+		"?/init.lua"
+	],
+	"runtime.pathStrict": true,
+	"runtime.builtin": {
+		"utf8": "enable"
+	},
+	"workspace.ignoreSubmodules": false,
+	"workspace.maxPreload": 10000,
+	"workspace.library": [
+		"aqua",
+		"${3rd}/OpenResty/library",
+		"${3rd}/luasocket/module/library"
+	],
+	"workspace.checkThirdParty": false,
+	"completion.autoRequire": false,
+	"diagnostics.disable": [],
+	"diagnostics.ignoredFiles": "Disable",
+	"diagnostics.neededFileStatus": {
+		"no-unknown": "Any",
+		"codestyle-check": "Any"
+	}
+}

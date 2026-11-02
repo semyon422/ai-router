@@ -1,0 +1,22 @@
+services:
+  ai-router:
+    image: openresty/openresty:1.31.1.1-2-noble
+    pull_policy: missing
+    user: "${AIROUTER_UID:-1000}:${AIROUTER_GID:-1000}"
+    working_dir: /app
+    entrypoint:
+      - /bin/sh
+      - /app/docker/ai-router-entrypoint.sh
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - "${AIROUTER_APP_DIR:-.}:/app:ro"
+      - "${AIROUTER_SERVER_STATE_PATH:-./server-state}:/router-state"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - /app/luajit docker/ai-router-healthcheck.lua
+      interval: 15s
+      timeout: 8s
+      retries: 5
+      start_period: 15s
