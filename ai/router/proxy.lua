@@ -222,6 +222,7 @@ print(("Responses endpoint (OpenAI): http://%s:%d/v1/responses"):format(bound_ho
 if network.socks5 then
 	print(("SOCKS5 upstream routing enabled via %s:%d"):format(network.socks5.host, network.socks5.port))
 end
+	io.flush()
 
 local running, run_err = pcall(function()
 	while true do
