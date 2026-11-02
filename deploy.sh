@@ -7,8 +7,10 @@ commit="${1:?usage: ./deploy.sh <full-commit-sha>}"
 
 cd "$(dirname "$0")"
 
-exec 9>.deploy.lock
-flock --wait 7200 9
+# The GHA workflow's remote script may already hold the deploy lock on fd 9;
+# reuse its open file in that case, otherwise acquire the lock here.
+[ -e /proc/self/fd/9 ] || exec 9>.deploy.lock
+flock -n 9 || { echo "deploy already in progress" >&2; exit 1; }
 
 test -z "$(git status --porcelain --untracked-files=no)"
 git fetch --no-recurse-submodules --no-tags origin "$commit"
