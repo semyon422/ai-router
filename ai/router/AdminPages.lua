@@ -20,7 +20,7 @@ local UsageDashboardGenerator = require("ai.router.UsageDashboardGenerator")
 ---@field templates {[string]: fun(env: table?): string}
 local AdminPages = class()
 
-AdminPages.session_seconds = 12 * 3600
+AdminPages.cookie_max_age = 10 * 365 * 24 * 3600
 
 ---@class ai.router.AdminPagesOptions
 ---@field users_repo ai.router.UsersRepo
@@ -93,7 +93,7 @@ end
 ---@return table?
 function AdminPages:session(req)
 	local session = self.sessions:get(req.headers)
-	if session and session.expires and session.expires >= self.get_time() then return session end
+	if session then return session end
 end
 
 ---@param req web.Request
@@ -106,7 +106,7 @@ function AdminPages:handle(req, res)
 		if req.method == "POST" and path == "/admin/login" then
 			local form = http_util.get_form(req) or {}
 			if form.password == self.password then
-				self.sessions:set(res.headers, {expires = self.get_time() + self.session_seconds})
+				self.sessions:set(res.headers, {}, AdminPages.cookie_max_age)
 				redirect(res, "/admin/overview")
 			else
 				send(res, 401, self.templates.login({error_message = "Invalid password.", stylesheet = self.stylesheet, theme_script = self.theme_script}))
