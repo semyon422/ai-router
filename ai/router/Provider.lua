@@ -24,6 +24,22 @@ local class = require("class")
 ---@class ai.router.Provider
 local Provider = {}
 
+-- Usage collection is mandatory for accounting, independent of whether the
+-- downstream client wants a usage SSE frame. Never mutate the client body.
+---@param body table
+---@return table
+function Provider.streamingBody(body)
+	local result, options = {}, {}
+	for key, value in pairs(body) do result[key] = value end
+	if type(body.stream_options) == "table" then
+		for key, value in pairs(body.stream_options) do options[key] = value end
+	end
+	options.include_usage = true
+	result.stream = true
+	result.stream_options = options
+	return result
+end
+
 -- Accepts Responses-style usage (`input_tokens`, `output_tokens`,
 -- `input_tokens_details.cached_tokens`) and Chat Completions usage
 -- (`prompt_tokens`, `completion_tokens`, `prompt_tokens_details.cached_tokens`).

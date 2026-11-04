@@ -35,6 +35,7 @@ local RequestMetrics = require("ai.router.RequestMetrics")
 ---@field request_windows {[string]: {started_at: number, count: integer}}
 ---@field mcp_server mcp.Server?
 ---@field admin_handler (fun(req: web.Request, res: web.Response): boolean?)?
+---@field chat_handler (fun(req: web.Request, res: web.Response, ip: string): boolean?)?
 ---@field http_server web.HttpServer
 local Server = class()
 
@@ -65,6 +66,7 @@ Server.max_requests_per_minute = 120
 ---@field max_concurrent_requests_per_user integer?
 ---@field max_requests_per_minute integer?
 ---@field admin_handler (fun(req: web.Request, res: web.Response): boolean?)?
+---@field chat_handler (fun(req: web.Request, res: web.Response, ip: string): boolean?)?
 
 ---@param options ai.router.ServerOptions
 function Server:new(options)
@@ -81,6 +83,7 @@ function Server:new(options)
 		or self.max_concurrent_requests_per_user
 	self.max_requests_per_minute = options.max_requests_per_minute or self.max_requests_per_minute
 	self.admin_handler = options.admin_handler
+	self.chat_handler = options.chat_handler
 	self.active_requests = {}
 	self.request_windows = {}
 	self.providers = {}
@@ -650,20 +653,19 @@ end
 ---@param req web.Request
 ---@param res web.Response
 ---@param ip string
-function Server:handle(req, res, ip)
-	local path = req.uri:match("^[^?]+") or req.uri
-	if path == "/mcp" and self.mcp_server then
-		self.mcp_server:handleHttp(req, res, ip, 0)
-		return
-	end
-	if self.admin_handler and self.admin_handler(req, res) then
-		return
-	end
-	local metrics = RequestMetrics(self.get_time)
-	local started_at = metrics.started_at
-	local created_at = os.time()
-	local token = self:authenticate(req)
-	local user = token and self.users_repo:findByKeyHash(digest.hash("sha256", token, true)) or nil
+-- Shared by the bearer-authenticated /v1/* endpoints and the
+-- session-authenticated /chat/completions endpoint: per-user rate and
+-- concurrency limits, body validation, at most one provider call, usage
+-- accounting, and the bounded per-request log.
+---@param req web.Request
+---@param res web.Response
+---@param user ai.router.UserRow
+---@param native boolean
+---@param metrics ai.router.RequestMetrics
+---@param created_at number
+---@param started_at number
+---@return integer status
+function Server:processInference(req, res, user, native, metrics, created_at, started_at)
 	---@type integer
 	local status
 	---@type ai.router.AttemptResult?
@@ -671,22 +673,7 @@ function Server:handle(req, res, ip)
 	local should_record = false
 	---@type table?
 	local request
-	if not user or user.disabled then
-		sendError(res, 401, "invalid access token", "authentication_error", "invalid_api_key")
-		status = 401
-	elseif req.method == "GET" and path == "/v1/models" then
-		local grants = {}
-		for _, model in ipairs(self.users_repo:getGrants(user.id)) do
-			if self.router.state.public_models[model] then
-				table.insert(grants, {id = model, object = "model", owned_by = "router"})
-			end
-		end
-		sendJson(res, {object = "list", data = json.array(grants)})
-		status = 200
-	elseif req.method ~= "POST" or (path ~= "/v1/chat/completions" and path ~= "/v1/responses") then
-		sendError(res, 404, "route not found", "invalid_request_error", "not_found")
-		status = 404
-	elseif not self:consumeRateLimit(tostring(user.id), user.max_rpm) then
+	if not self:consumeRateLimit(tostring(user.id), user.max_rpm) then
 		res.headers:set("Retry-After", 60)
 		sendError(res, 429, "rate limit exceeded", "rate_limit_error", "rate_limit_exceeded", metrics)
 		status = 429
@@ -725,15 +712,14 @@ function Server:handle(req, res, ip)
 							status = 400
 						else
 							request = decoded
-							local native = path == "/v1/responses"
 							local session_id, session_err
 							if native then session_id, session_err = ResponsesProtocol.getSessionAffinity(req) end
 							if session_err then
-									sendError(res, 400, session_err, "invalid_request_error", "invalid_session_affinity", metrics)
+								sendError(res, 400, session_err, "invalid_request_error", "invalid_session_affinity", metrics)
 								status = 400
 							else
 								status, attempt_result = self:complete(res, request, user,
-										native and "responses" or "chat_completions", session_id, metrics)
+									native and "responses" or "chat_completions", session_id, metrics)
 							end
 						end
 					else
@@ -751,7 +737,7 @@ function Server:handle(req, res, ip)
 			pcall(function()
 				if res.headers_sent then
 					-- Native Responses closes here: this handler has no attempt sequence state.
-					if path ~= "/v1/responses" then
+					if not native then
 						sendEvent(res, {error = {message = "request failed", type = "internal_error", code = "internal_error"}})
 						sendEvent(res, "[DONE]")
 					end
@@ -762,18 +748,17 @@ function Server:handle(req, res, ip)
 			end)
 		end
 	end
-	if should_record and user then
+	if should_record then
 		self:record(os.time(), user, status, request, attempt_result)
 	end
-	if user and not user.disabled and req.method == "POST"
-		and (path == "/v1/responses" or path == "/v1/chat/completions") then
+	if user and not user.disabled then
 		local logged = pcall(function()
 			local counters = request and requestCounters(request, attempt_result)
 			self.request_logs_repo:record({created_at = created_at, user = user.name,
 				model = request and type(request.model) == "string" and request.model:sub(1, 193) or "",
 				channel = attempt_result and attempt_result.channel or "",
 				upstream_model = attempt_result and attempt_result.upstream_model or "",
-				protocol = path == "/v1/responses" and "responses" or "chat_completions",
+				protocol = native and "responses" or "chat_completions",
 				stream = request ~= nil and request.stream == true,
 				status = status, duration_ms = math.max(0, math.floor((self.get_time() - started_at) * 1000)),
 				input_tokens = counters and counters.input_tokens or 0,
@@ -786,21 +771,69 @@ function Server:handle(req, res, ip)
 		end)
 		if not logged then self.logger("request log write failed") end
 	end
+	return status
+end
+
+-- One access-log line per request; callers never format or leak details themselves.
+---@param ip string
+---@param user ai.router.UserRow?
+---@param method string
+---@param path string
+---@param status integer
+---@param duration number
+function Server:logRequest(ip, user, method, path, status, duration)
 	self.logger(("user=%s ip=%s method=%s path=%s status=%d duration=%.3fs")
 		:format(
 			sanitizeLogValue(user and user.name or "-"),
 			sanitizeLogValue(ip),
-			sanitizeLogValue(req.method),
+			sanitizeLogValue(method),
 			sanitizeLogValue(path),
 			status,
-			self.get_time() - started_at
+			duration
 		))
 end
 
----@param host string
----@param port integer
----@return true?
----@return string?
+---@param req web.Request
+---@param res web.Response
+---@param ip string
+function Server:handle(req, res, ip)
+	local path = req.uri:match("^[^?]+") or req.uri
+	if path == "/mcp" and self.mcp_server then
+		self.mcp_server:handleHttp(req, res, ip, 0)
+		return
+	end
+	if self.admin_handler and self.admin_handler(req, res) then
+		return
+	end
+	if self.chat_handler and self.chat_handler(req, res, ip) then
+		return
+	end
+	local metrics = RequestMetrics(self.get_time)
+	local started_at = metrics.started_at
+	local token = self:authenticate(req)
+	local user = token and self.users_repo:findByKeyHash(digest.hash("sha256", token, true)) or nil
+	---@type integer
+	local status
+	if not user or user.disabled then
+		sendError(res, 401, "invalid access token", "authentication_error", "invalid_api_key")
+		status = 401
+	elseif req.method == "GET" and path == "/v1/models" then
+		local grants = {}
+		for _, model in ipairs(self.users_repo:getGrants(user.id)) do
+			if self.router.state.public_models[model] then
+				table.insert(grants, {id = model, object = "model", owned_by = "router"})
+			end
+		end
+		sendJson(res, {object = "list", data = json.array(grants)})
+		status = 200
+	elseif req.method ~= "POST" or (path ~= "/v1/chat/completions" and path ~= "/v1/responses") then
+		sendError(res, 404, "route not found", "invalid_request_error", "not_found")
+		status = 404
+	else
+		status = self:processInference(req, res, user, path == "/v1/responses", metrics, os.time(), started_at)
+	end
+	self:logRequest(ip, user, req.method, path, status, self.get_time() - started_at)
+end
 function Server:start(host, port)
 	return self.http_server:start(host, port)
 end

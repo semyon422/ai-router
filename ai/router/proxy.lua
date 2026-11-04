@@ -8,6 +8,7 @@ local ZaiProvider = require("ai.router.ZaiProvider")
 local CompatProvider = require("ai.router.CompatProvider")
 local Server = require("ai.router.Server")
 local AdminPages = require("ai.router.AdminPages")
+local ChatPages = require("ai.router.ChatPages")
 local Management = require("ai.router.Management")
 local McpTools = require("ai.router.McpTools")
 local McpServer = require("mcp.Server")
@@ -201,6 +202,10 @@ server.mcp_server = mcp
 server.admin_handler = function(req, res)
 	return admin:handle(req, res)
 end
+local chat = ChatPages({users_repo = users_repo, server = server, password = assert(config.admin_password)})
+server.chat_handler = function(req, res, ip)
+	return chat:handle(req, res, ip)
+end
 
 server:reload(channels_repo:list(), models_repo:list())
 
@@ -218,6 +223,7 @@ print(("AI router listening on http://%s:%d"):format(assert(bound_host), assert(
 print(("Admin panel: http://%s:%d/admin"):format(bound_host, bound_port))
 print(("Management MCP: http://%s:%d/mcp (bearer token required)"):format(bound_host, bound_port))
 print(("Chat Completions endpoint (GLM/compat): http://%s:%d/v1/chat/completions"):format(bound_host, bound_port))
+print(("Web chat (API-key sign-in): http://%s:%d/chat"):format(bound_host, bound_port))
 print(("Responses endpoint (OpenAI): http://%s:%d/v1/responses"):format(bound_host, bound_port))
 if network.socks5 then
 	print(("SOCKS5 upstream routing enabled via %s:%d"):format(network.socks5.host, network.socks5.port))

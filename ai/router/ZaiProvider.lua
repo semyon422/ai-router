@@ -118,7 +118,7 @@ function ZaiProvider:completeStream(body, _upstream_model, on_delta)
 	if not upstream_body then
 		return nil, nil, {status = 400, message = message, type = "invalid_request_error", code = code}
 	end
-	local message_result, err, provider_error = self.create_client():completeStream(upstream_body, on_delta)
+	local message_result, err, provider_error = self.create_client():completeStream(Provider.streamingBody(upstream_body), on_delta)
 	if not message_result then
 		return nil, err, provider_error
 	end

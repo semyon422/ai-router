@@ -152,6 +152,45 @@ local function fakeOpenStream(data_lines)
 end
 
 ---@param t testing.T
+function test.streaming_usage_is_always_requested_without_mutating_client_body(t)
+	for _, kind in ipairs({"zai", "compat"}) do
+		for _, usage_option in ipairs({"missing", "false", "true"}) do
+			local body = requestBody('{"model":"glm-5.3","messages":[{"role":"user","content":"hi"}],"stream":true}')
+			if usage_option ~= "missing" then
+				body.stream_options = json.decode('{"include_usage":' .. usage_option .. '}')
+			end
+			local before = json.encode(body)
+			local captured
+			local open_stream = fakeOpenStream({
+				'{"choices":[{"delta":{"content":"hello"}}]}',
+				'{"choices":[],"usage":{"prompt_tokens":120,"completion_tokens":30,"prompt_tokens_details":{"cached_tokens":80}}}',
+				"[DONE]",
+			})
+			local options = {
+				config = kind == "zai" and zai_config or {base_url = "http://compat.test/v1", models = {"glm-5.3"}},
+				request = function() error("stream only") end,
+				open_stream = function(...)
+					local stream = open_stream(...)
+					local send_body = stream.sendBody
+					stream.sendBody = function(self, encoded)
+						captured = json.decode(encoded)
+						return send_body(self, encoded)
+					end
+					return stream
+				end,
+			}
+			local provider = kind == "zai" and ZaiProvider(options) or CompatProvider(options)
+			local message = provider:completeStream(body, "glm-5.3", function() return true end)
+			t:eq(captured.stream_options.include_usage, true)
+			t:eq(json.encode(body), before)
+			t:eq(message.usage.input_tokens, 120)
+			t:eq(message.usage.output_tokens, 30)
+			t:eq(message.usage.cached_input_tokens, 80)
+		end
+	end
+end
+
+---@param t testing.T
 function test.zai_provider_relays_stream_deltas(t)
 	local open_stream = fakeOpenStream({
 		json.encode({id = "1", model = "glm-5.3", choices = {{index = 0, delta = {content = "he"}}}}),

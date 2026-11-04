@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Router — Chat</title>
+<style><%- stylesheet %></style>
+<script><%- theme_script %></script>
+</head>
+<body class="login-page">
+<main class="login-card">
+<div class="brand"><span class="brand-mark" aria-hidden="true">R</span>AI Router <span class="badge">Chat</span></div>
+<h1>Talk to your models.</h1>
+<p class="muted">Sign in with the API key your operator gave you.</p>
+<% if error_message then %><div class="notice" role="alert"><%= error_message %></div><% end %>
+<form method="post" action="/chat/login">
+<label for="api_key">API key</label>
+<input id="api_key" name="api_key" type="password" autocomplete="off" required autofocus>
+<button type="submit">Sign in</button>
+</form>
+<footer>The key is verified once and exchanged for a session cookie; it is not stored in the browser.</footer>
+</main>
+</body>
+</html>

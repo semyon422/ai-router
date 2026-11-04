@@ -2,6 +2,7 @@ local class = require("class")
 local CosocketScheduler = require("web.luasocket.CosocketScheduler")
 local Server = require("ai.router.Server")
 local AdminPages = require("ai.router.AdminPages")
+local ChatPages = require("ai.router.ChatPages")
 local Management = require("ai.router.Management")
 local McpTools = require("ai.router.McpTools")
 local McpServer = require("mcp.Server")
@@ -19,6 +20,7 @@ local LjsqliteDatabase = require("rdb.db.LjsqliteDatabase")
 ---@field scheduler web.CosocketScheduler
 ---@field server ai.router.Server
 ---@field admin ai.router.AdminPages
+---@field chat ai.router.ChatPages
 ---@field management ai.router.Management
 ---@field mcp mcp.Server
 ---@field users ai.router.UsersRepo
@@ -47,8 +49,10 @@ function Stack:new()
 	local options = {users_repo = self.users, channels_repo = self.channels, models_repo = self.models,
 		usage_repo = self.usage_repo, monitor = self.monitor, server = self.server, password = self.password}
 	self.admin = AdminPages(options)
+	self.chat = ChatPages({users_repo = self.users, server = self.server, password = self.password})
 	self.management = Management(options)
 	self.server.admin_handler = function(req, res) return self.admin:handle(req, res) end
+	self.server.chat_handler = function(req, res, ip) return self.chat:handle(req, res, ip) end
 	self.mcp = McpServer(self.scheduler, McpTools.create(self.management), {
 		host = "127.0.0.1", port = 0, token = self.token, server_info = {name = "ai-router", version = "test"},
 	})

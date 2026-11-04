@@ -4,8 +4,8 @@ local Provider = require("ai.router.Provider")
 
 -- Upstream adapter for a trusted local OpenAI-compatible endpoint such as
 -- llama.cpp. No field allowlist is applied: the validated client body is
--- forwarded verbatim with only the model name replaced, and deltas are
--- relayed unchanged.
+-- forwarded with the model name replaced and streaming usage always requested;
+-- deltas are relayed unchanged.
 ---@class ai.router.CompatProvider
 ---@operator call: ai.router.CompatProvider
 ---@field create_client fun(): zai.Client
@@ -87,7 +87,7 @@ end
 ---@return zai.ProviderError? provider_error
 function CompatProvider:completeStream(body, upstream_model, on_delta)
 	local message, err, provider_error = self.create_client():completeStream(
-		CompatProvider.upstreamBody(body, upstream_model), on_delta)
+		Provider.streamingBody(CompatProvider.upstreamBody(body, upstream_model)), on_delta)
 	if not message then
 		return nil, err, provider_error
 	end
