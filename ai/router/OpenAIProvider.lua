@@ -15,7 +15,7 @@ local SubscriptionClient = require("ai.openai.SubscriptionClient")
 ---@field request zai.RequestFunc
 ---@field open_stream openai.OpenStreamFunc
 ---@field timeout number?
----@field get_time (fun(): number)?
+---@field get_time fun(): number
 ---@field auth openai.SubscriptionAuthGuard
 ---@field usage_url string?
 
@@ -66,7 +66,8 @@ function OpenAIProvider:new(options)
 	self.request = options.request
 	self.open_stream = options.open_stream
 	self.timeout = options.timeout
-	self.get_time = options.get_time or os.time
+	assert(type(options.get_time) == "function", "get_time is required")
+	self.get_time = options.get_time
 	self.usage_url = options.usage_url or OpenAIProvider.usage_url
 	self.auth = assert(options.auth, "OpenAI auth guard is required")
 end

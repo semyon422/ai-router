@@ -58,7 +58,7 @@ function test.zai_provider_normalizes_and_canonicalizes(t)
 		usage = {prompt_tokens = 3, completion_tokens = 2, total_tokens = 5},
 	})
 	local request, captured = fakeZaiRequest(response_body)
-	local provider = ZaiProvider({config = zai_config, request = request, timeout = 5})
+	local provider = ZaiProvider({get_time = function() return 0 end, config = zai_config, request = request, timeout = 5})
 
 	local message, err, provider_error = provider:complete(requestBody([[
 		{"model": "glm-5.3-flash", "messages": [{"role": "user", "content": "hi"}]}
@@ -86,6 +86,7 @@ function test.zai_provider_fetches_usage_with_constructor_wiring(t)
 	}}
 	for _, url in ipairs({ZaiProvider.usage_url, "https://example.com/usage"}) do
 		local provider = ZaiProvider({
+			get_time = function() return 0 end,
 			config = {base_url = zai_config.base_url, api_key = zai_config.api_key,
 				models = zai_config.models, usage_url = url ~= ZaiProvider.usage_url and url or nil},
 			request = function(request_url, body, options)
@@ -110,7 +111,7 @@ end
 ---@param t testing.T
 function test.zai_provider_rejects_unsupported_fields_locally(t)
 	local request = function() error("must not be called") end
-	local provider = ZaiProvider({config = zai_config, request = request, timeout = 5})
+	local provider = ZaiProvider({get_time = function() return 0 end, config = zai_config, request = request, timeout = 5})
 
 	local message, err, provider_error = provider:complete(requestBody([[
 		{"model": "glm-5.3", "messages": [{"role": "user", "content": "hi"}], "seed": 1}
@@ -167,6 +168,7 @@ function test.streaming_usage_is_always_requested_without_mutating_client_body(t
 				"[DONE]",
 			})
 			local options = {
+				get_time = function() return 0 end,
 				config = kind == "zai" and zai_config or {base_url = "http://compat.test/v1", models = {"glm-5.3"}},
 				request = function() error("stream only") end,
 				open_stream = function(...)
@@ -200,6 +202,7 @@ function test.zai_provider_relays_stream_deltas(t)
 		"[DONE]",
 	})
 	local provider = ZaiProvider({
+		get_time = function() return 0 end,
 		config = zai_config,
 		request = function() error("streaming uses open_stream") end,
 		open_stream = open_stream,
@@ -235,6 +238,7 @@ function test.compat_provider_forwards_body_verbatim(t)
 		})}
 	end
 	local provider = CompatProvider({
+		get_time = function() return 0 end,
 		config = {base_url = "http://127.0.0.1:8080/v1", models = {"llama-70b"}},
 		request = request,
 		timeout = 5,
@@ -268,6 +272,7 @@ function test.openai_provider_preserves_native_responses_and_affinity(t)
 		}}}),
 	})
 	local provider = OpenAIProvider({
+		get_time = function() return 0 end,
 		config = {},
 		auth = {getAccess = function() return "access", "account" end},
 		request = function() error("usage only") end,
@@ -358,7 +363,7 @@ function test.openai_usage_reports_http_challenge_and_invalid_response_safely(t)
 	local headers = Headers()
 	headers:set("cf-mitigated", "challenge")
 	local status, body = 403, "<html>SECRET</html>"
-	local provider = OpenAIProvider({config = {},
+	local provider = OpenAIProvider({get_time = function() return 0 end, config = {},
 		auth = {getAccess = function() return "secret-access", "account" end},
 		request = function() return {status = status, headers = headers, body = body} end})
 	local usage, err, poll_error = provider:fetchUsage()
@@ -386,7 +391,7 @@ end
 ---@param t testing.T
 function test.zai_usage_reports_http_and_invalid_responses(t)
 	local status, body = 503, "SECRET"
-	local provider = ZaiProvider({config = zai_config,
+	local provider = ZaiProvider({get_time = function() return 0 end, config = zai_config,
 		request = function() return {status = status, body = body} end})
 	local _, _, http_error = provider:fetchUsage()
 	t:eq(http_error.code, "upstream_http")

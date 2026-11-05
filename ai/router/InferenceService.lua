@@ -1,8 +1,6 @@
 local class = require("class")
 local json = require("web.json")
 local random = require("web.random")
----@type {gettime: fun(): number}
-local socket = require("socket")
 local Catalog = require("ai.router.Catalog")
 local Router = require("ai.router.Router")
 local ChatProtocol = require("ai.openai.ChatCompletionsProtocol")
@@ -56,7 +54,7 @@ InferenceService.max_requests_per_minute = 120
 ---@field monitor ai.router.UsageMonitor
 ---@field provider_factory fun(channel: ai.router.ChannelRow): ai.router.ProviderMethods?
 ---@field logger (fun(line: string))?
----@field get_time (fun(): number)?
+---@field get_time fun(): number
 ---@field max_body_size integer?
 ---@field max_concurrent_requests_per_user integer?
 ---@field max_requests_per_minute integer?
@@ -70,7 +68,8 @@ function InferenceService:new(options)
 	self.monitor = options.monitor
 	self.provider_factory = options.provider_factory
 	self.logger = options.logger or print
-	self.get_time = options.get_time or socket.gettime
+	assert(type(options.get_time) == "function", "get_time is required")
+	self.get_time = options.get_time
 	self.max_body_size = options.max_body_size or self.max_body_size
 	self.max_concurrent_requests_per_user = options.max_concurrent_requests_per_user
 		or self.max_concurrent_requests_per_user

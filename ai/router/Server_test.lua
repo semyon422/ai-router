@@ -121,6 +121,7 @@ local function startStack(opts)
 	end
 	local scheduler = CosocketScheduler()
 	local server = Server({
+		get_time = scheduler.get_time,
 		scheduler = scheduler,
 		users_repo = users,
 		usage_repo = usage_repo,
@@ -636,6 +637,7 @@ function test.real_upstream_auth_failure_and_stream_timeout(t)
 	local closed = 0
 	for _, mode in ipairs({"auth", "stall"}) do
 		stack.providers_by_name["zai-1"] = CompatProvider({
+			get_time = stack.scheduler.get_time,
 			config = {base_url = ("http://127.0.0.1:%d/%s"):format(port, mode), models = {"glm-5.3"}}, timeout = 0.05,
 			request = function(url, body, options)
 				options.scheduler = stack.scheduler
@@ -702,6 +704,7 @@ function test.real_downstream_disconnect_closes_upstream_and_releases_slot(t)
 	local _, upstream_port = upstream:getAddress()
 	local closed = 0
 	stack.providers_by_name["zai-1"] = CompatProvider({
+		get_time = stack.scheduler.get_time,
 		config = {base_url = ("http://127.0.0.1:%d"):format(upstream_port), models = {"glm-5.3"}}, timeout = 1,
 		request = function() error("not used") end,
 		open_stream = function(url, options)

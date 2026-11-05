@@ -1,8 +1,6 @@
 local class = require("class")
 local digest = require("digest")
 local json = require("web.json")
----@type {gettime: fun(): number}
-local socket = require("socket")
 local HttpServer = require("web.http.Server")
 local InferenceService = require("ai.router.InferenceService")
 local RequestMetrics = require("ai.router.RequestMetrics")
@@ -35,7 +33,8 @@ Server.max_clients = 64
 function Server:new(options)
 	self.users_repo = options.users_repo
 	self.logger = options.logger or print
-	self.get_time = options.get_time or socket.gettime
+	assert(type(options.get_time) == "function", "get_time is required")
+	self.get_time = options.get_time
 	self.admin_handler = options.admin_handler
 	self.chat_handler = options.chat_handler
 	self.inference = InferenceService({

@@ -17,9 +17,11 @@ local CompatProvider = class()
 ---@field request openai.RequestFunc
 ---@field open_stream openai.OpenStreamFunc
 ---@field timeout number?
+---@field get_time fun(): number
 
 ---@param options ai.router.CompatProviderOptions
 function CompatProvider:new(options)
+	assert(type(options.get_time) == "function", "get_time is required")
 	local config = options.config
 	assert(type(config.base_url) == "string" and config.base_url ~= "", "compat base_url is required")
 	assert(type(config.models) == "table" and #config.models > 0, "compat models are required")
@@ -27,6 +29,7 @@ function CompatProvider:new(options)
 	local open_stream = options.open_stream
 	self.create_client = function()
 		return ChatCompletionsClient({
+			get_time = options.get_time,
 			base_url = config.base_url,
 			api_key = config.api_key,
 			timeout = options.timeout,

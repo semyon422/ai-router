@@ -85,6 +85,7 @@ local function startStack(opts)
 	if opts and opts.providers then providers_by_name = opts.providers end
 	local scheduler = CosocketScheduler()
 	local server = Server({
+		get_time = scheduler.get_time,
 		scheduler = scheduler,
 		users_repo = users,
 		usage_repo = usage_repo,
@@ -378,6 +379,7 @@ function test.browser_usage_option_reaches_upstream_and_request_log(t)
 	local stack = startStack()
 	local captured
 	stack.providers_by_name["zai-1"] = CompatProvider({
+		get_time = stack.scheduler.get_time,
 		config = {base_url = "http://compat.test/v1", models = {"glm-5.3"}},
 		request = function() error("stream only") end,
 		open_stream = function()

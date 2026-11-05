@@ -27,9 +27,11 @@ ZaiProvider.usage_url = "https://api.z.ai/api/monitor/usage/quota/limit"
 ---@field request zai.RequestFunc
 ---@field open_stream zai.OpenStreamFunc
 ---@field timeout number?
+---@field get_time fun(): number
 
 ---@param options ai.router.ZaiProviderOptions
 function ZaiProvider:new(options)
+	assert(type(options.get_time) == "function", "get_time is required")
 	local config = options.config
 	assert(type(config.base_url) == "string" and config.base_url ~= "", "zai base_url is required")
 	assert(type(config.api_key) == "string" and config.api_key ~= "", "zai api_key is required")
@@ -55,6 +57,7 @@ function ZaiProvider:new(options)
 	local open_stream = options.open_stream
 	self.create_client = function()
 		return ZaiClient({
+			get_time = options.get_time,
 			base_url = config.base_url,
 			api_key = config.api_key,
 			timeout = options.timeout,

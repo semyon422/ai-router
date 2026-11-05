@@ -43,7 +43,7 @@ function Stack:new()
 	self.models = ModelsRepo(self.storage.models)
 	self.usage_repo = UsageRepo(self.storage.models)
 	self.monitor = UsageMonitor({usage_repo = self.usage_repo, logger = function() end})
-	self.server = Server({scheduler = self.scheduler, users_repo = self.users, usage_repo = self.usage_repo,
+	self.server = Server({get_time = self.scheduler.get_time, scheduler = self.scheduler, users_repo = self.users, usage_repo = self.usage_repo,
 		monitor = self.monitor, logger = function() end, provider_factory = function() return nil end})
 	self.server:reload({}, {})
 	local options = {users_repo = self.users, channels_repo = self.channels, models_repo = self.models,

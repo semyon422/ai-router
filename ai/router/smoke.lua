@@ -71,6 +71,7 @@ assert(upstream_server:start("127.0.0.1", 0))
 local _, upstream_port = upstream_server:getAddress()
 
 local server = Server({
+	get_time = scheduler.get_time,
 	scheduler = scheduler,
 	users_repo = users,
 	usage_repo = usage_repo,
@@ -78,7 +79,7 @@ local server = Server({
 	logger = function() end,
 	provider_factory = function(channel)
 		if channel.kind == "openai" then
-			return OpenAIProvider({config = channel.config,
+			return OpenAIProvider({get_time = scheduler.get_time, config = channel.config,
 				auth = {getAccess = function() return "mock-access", "mock-account" end},
 				request = function() return nil, "usage not used" end,
 				open_stream = function(_, options)
@@ -93,6 +94,7 @@ local server = Server({
 		local config = channel.config
 		---@cast config {[string]: any}
 		return CompatProvider({
+			get_time = scheduler.get_time,
 			config = config,
 			request = function(url, body, options)
 				options = options or {}

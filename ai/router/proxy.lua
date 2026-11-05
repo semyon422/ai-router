@@ -135,6 +135,7 @@ local function providerFactory(channel)
 	---@cast channel_config {[string]: any}
 	if channel.kind == "openai" then
 		return OpenAIProvider({
+			get_time = scheduler.get_time,
 			auth = openai_login:getGuard(channel.id),
 			config = {
 				reasoning_effort = channel_config.reasoning_effort,
@@ -148,6 +149,7 @@ local function providerFactory(channel)
 		})
 	elseif channel.kind == "zai" then
 		return ZaiProvider({
+			get_time = scheduler.get_time,
 			config = channel_config,
 			request = request,
 			open_stream = openStream,
@@ -155,6 +157,7 @@ local function providerFactory(channel)
 		})
 	elseif channel.kind == "openai_compat" then
 		return CompatProvider({
+			get_time = scheduler.get_time,
 			config = channel_config,
 			request = request,
 			open_stream = openStream,
@@ -165,6 +168,7 @@ local function providerFactory(channel)
 end
 
 local server = Server({
+	get_time = scheduler.get_time,
 	scheduler = scheduler,
 	users_repo = users_repo,
 	usage_repo = usage_repo,
