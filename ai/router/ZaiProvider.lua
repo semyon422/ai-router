@@ -1,5 +1,5 @@
 local class = require("class")
-local json = require("web.json")
+local UsageClient = require("ai.zai.UsageClient")
 local ZaiClient = require("ai.zai.Client")
 local ZaiProtocol = require("ai.zai.Protocol")
 local Provider = require("ai.router.Provider")
@@ -20,7 +20,7 @@ local ChatProtocol = require("ai.openai.ChatCompletionsProtocol")
 ---@field create_client fun(): zai.Client
 local ZaiProvider = class()
 
-ZaiProvider.usage_url = "https://api.z.ai/api/monitor/usage/quota/limit"
+ZaiProvider.usage_url = UsageClient.url
 
 ---@class ai.router.ZaiProviderOptions
 ---@field config {[string]: any} channel config: base_url, api_key, models, model_redirects?, thinking?, tool_stream?
@@ -136,32 +136,7 @@ end
 ---@return string? request_error
 ---@return ai.router.UsageFetchError? provider_error
 function ZaiProvider:fetchUsage()
-	local response, request_err = self.request(self.usage_url, nil, {
-		method = "GET",
-		headers = {
-			Accept = "application/json",
-			Authorization = "Bearer " .. self.api_key,
-		},
-	})
-	if not response then return nil, request_err or "Z.ai usage request failed" end
-	if response.status < 200 or response.status >= 300 then
-		return nil, "Z.ai usage request failed", {
-			status = response.status,
-			message = "Z.ai usage request failed",
-			type = "upstream_error",
-			code = "upstream_http",
-		}
-	end
-	local usage = json.decode_safe(response.body)
-	if type(usage) ~= "table" then
-		return nil, "invalid Z.ai usage response", {code = "invalid_response"}
-	end
-	---@cast usage {[string]: any}
-	local data = usage.data
-	if type(data) ~= "table" then
-		return nil, "invalid Z.ai usage response: data object is missing", {code = "invalid_response"}
-	end
-	return data
+	return UsageClient.fetch({request = self.request, api_key = self.api_key, url = self.usage_url})
 end
 
 return ZaiProvider

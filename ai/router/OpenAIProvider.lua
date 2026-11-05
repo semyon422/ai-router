@@ -1,6 +1,5 @@
 local class = require("class")
-local json = require("web.json")
-local random = require("web.random")
+local UsageClient = require("ai.openai.UsageClient")
 local SubscriptionAuth = require("ai.openai.SubscriptionAuth")
 local SubscriptionClient = require("ai.openai.SubscriptionClient")
 
@@ -34,7 +33,7 @@ local SubscriptionClient = require("ai.openai.SubscriptionClient")
 ---@field usage_url string
 local OpenAIProvider = class()
 
-OpenAIProvider.usage_url = "https://chatgpt.com/backend-api/codex/usage"
+OpenAIProvider.usage_url = UsageClient.url
 
 ---@class ai.router.OpenAIAuthOptions
 ---@field channel_id integer
@@ -109,42 +108,7 @@ end
 ---@return string? request_error
 ---@return ai.router.UsageFetchError? provider_error
 function OpenAIProvider:fetchUsage()
-	local access_token, account_id, access_err = self.auth:getAccess()
-	if not access_token then
-		return nil, access_err or "OpenAI login is required", {code = "auth"}
-	end
-	if not account_id or account_id == "" then
-		return nil, "OpenAI login has no account ID", {code = "auth"}
-	end
-	local client_request_id = random.hex(16)
-	local response, request_err = self.request(self.usage_url, nil, {
-		method = "GET",
-		headers = {
-			Authorization = "Bearer " .. access_token,
-			["ChatGPT-Account-Id"] = account_id,
-			Accept = "application/json",
-			Originator = "ai-router",
-			["User-Agent"] = "ai-router",
-			["x-client-request-id"] = client_request_id,
-		},
-	})
-	if not response then return nil, request_err or "OpenAI usage request failed" end
-	if response.status < 200 or response.status >= 300 then
-		local request_id = response.headers and response.headers:get("x-request-id") or client_request_id
-		local challenged = response.headers and response.headers:get("cf-mitigated") == "challenge"
-		return nil, "OpenAI usage request failed", {
-			status = response.status,
-			message = "OpenAI usage request failed",
-			type = "upstream_error",
-			code = challenged and "cloudflare_challenge" or "upstream_http",
-			request_id = request_id,
-		}
-	end
-	local usage = json.decode_safe(response.body)
-	if type(usage) ~= "table" then
-		return nil, "invalid OpenAI usage response", {code = "invalid_response"}
-	end
-	return usage
+	return UsageClient.fetch({request = self.request, auth = self.auth, url = self.usage_url, originator = "ai-router"})
 end
 
 return OpenAIProvider
