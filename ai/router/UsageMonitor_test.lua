@@ -1,3 +1,4 @@
+local json = require("web.json")
 local UsageMonitor = require("ai.router.UsageMonitor")
 local UsageRepo = require("ai.router.UsageRepo")
 local RouterDatabase = require("ai.router.storage.RouterDatabase")
@@ -31,45 +32,6 @@ local function open()
 	storage.path = ":memory:"
 	storage:open()
 	return UsageRepo(storage.models), storage
-end
-
----@param t testing.T
-function test.parses_openai_usage_windows(t)
-	local windows = UsageMonitor.parseOpenAIUsage({
-		rate_limit = {
-			primary_window = {used_percent = 42.5, reset_at = 1780000000},
-			secondary_window = {used_percent = 5, reset_at = 1780100000},
-		},
-	})
-	t:eq(windows.five_hour.used_percent, 42.5)
-	t:eq(windows.five_hour.reset_at, 1780000000)
-	t:eq(windows.weekly.used_percent, 5)
-
-	t:eq(UsageMonitor.parseOpenAIUsage({}).five_hour, nil)
-	t:eq(UsageMonitor.parseOpenAIUsage({rate_limit = {primary_window = {}}}).five_hour.used_percent, nil)
-end
-
----@param t testing.T
-function test.parses_zai_usage_windows(t)
-	local windows = UsageMonitor.parseZaiUsage({
-		level = "lite",
-		limits = {
-			{type = "CREDIT_LIMIT", unit = 3, number = 5, usage = 2000, currentValue = 128,
-				remaining = 1871, percentage = 6, nextResetTime = 1791236689140},
-			{type = "CREDIT_LIMIT", unit = 6, number = 1, usage = 10000, currentValue = 1104,
-				remaining = 8895, percentage = 11, nextResetTime = 1791535121983},
-			{type = "OTHER", unit = 9, number = 2, percentage = 50},
-		},
-	})
-	t:eq(windows.five_hour.used_percent, 6)
-	t:eq(windows.five_hour.used_tokens, 128)
-	t:eq(windows.five_hour.quota_tokens, 2000)
-	t:eq(windows.five_hour.reset_at, 1791236689)
-	t:eq(windows.weekly.used_percent, 11)
-	t:eq(windows.weekly.quota_tokens, 10000)
-	t:eq(windows.weekly, nil or windows.weekly)
-	t:eq(windows.monthly, nil)
-	t:eq(UsageMonitor.parseZaiUsage({}).five_hour, nil)
 end
 
 ---@param t testing.T
@@ -295,6 +257,66 @@ function test.failed_first_poll_is_removed_without_a_window_and_local_windows_do
 	monitor:refresh(1, 1060)
 	t:eq(monitor.poll_status[1], nil)
 	t:eq(monitor.windows[1].five_hour.used_percent, 0)
+	storage:close()
+end
+
+---@param t testing.T
+function test.malformed_upstream_windows_report_invalid_response_without_losing_snapshots(t)
+	local usage_repo, storage = open()
+	for _, kind in ipairs({"openai", "zai"}) do
+		local monitor = UsageMonitor({usage_repo = usage_repo})
+		local payload
+		local channel = subState({kind = kind})
+		monitor:setChannels({channel}, {[1] = function() return payload end})
+		if kind == "openai" then
+			payload = {rate_limit = {primary_window = {used_percent = 0}, secondary_window = {used_percent = 110}}}
+		else
+			payload = {limits = {{unit = 3, number = 5, percentage = 0}, {unit = 6, number = 1, percentage = 110}}}
+		end
+		monitor:refresh(1, 1000)
+		t:eq(monitor.poll_status[1].succeeded_at, 1000)
+		local malformed_window = kind == "openai"
+			and {rate_limit = {primary_window = {used_percent = 0 / 0}, secondary_window = "SECRET"}}
+			or {limits = {{unit = 3, number = 5, percentage = math.huge}, false}}
+		for _, invalid in ipairs({123, "SECRET", json.null, {}, malformed_window}) do
+			payload = invalid
+			monitor:refresh(1, 1060)
+			t:eq(monitor.poll_status[1].error.code, "invalid_response")
+			t:eq(monitor.poll_status[1].succeeded_at, 1000)
+			t:eq(monitor.windows[1].five_hour.used_percent, 0)
+			t:eq(monitor.windows[1].weekly.used_percent, 110)
+			t:eq(monitor.windows[1].five_hour.updated_at, 1000)
+			t:eq(monitor.windows[1].weekly.updated_at, 1000)
+		end
+	end
+	storage:close()
+end
+
+---@param t testing.T
+function test.partial_response_updates_only_valid_requested_windows(t)
+	local usage_repo, storage = open()
+	local monitor = UsageMonitor({usage_repo = usage_repo})
+	local channel = subState({kind = "openai"})
+	local payload = {rate_limit = {primary_window = {used_percent = 10}, secondary_window = {used_percent = 20}}}
+	monitor:setChannels({channel}, {[1] = function() return payload end})
+	monitor:refresh(1, 1000)
+	payload = {rate_limit = {primary_window = {used_percent = 30}}}
+	monitor:refresh(1, 1060)
+	t:eq(monitor.windows[1].five_hour.used_percent, 30)
+	t:eq(monitor.windows[1].five_hour.updated_at, 1060)
+	t:eq(monitor.windows[1].weekly.used_percent, 20)
+	t:eq(monitor.windows[1].weekly.updated_at, 1000)
+	t:eq(monitor.poll_status[1].error.code, "invalid_response")
+	t:eq(monitor.poll_status[1].succeeded_at, 1000)
+	-- Completeness is monitor policy: an upstream five-hour window and local
+	-- weekly estimate do not require a weekly window in the provider response.
+	channel.usage_source.weekly = "local"
+	channel.weekly_quota_tokens = 100
+	monitor:refresh(1, 1120)
+	t:eq(monitor.poll_status[1].error, nil)
+	t:eq(monitor.poll_status[1].succeeded_at, 1120)
+	t:eq(monitor.windows[1].weekly.source, "local")
+	t:eq(monitor.windows[1].weekly.used_tokens, 0)
 	storage:close()
 end
 

@@ -104,7 +104,7 @@ function OpenAIProvider:createResponse(body, upstream_model, session_id, on_even
 end
 
 -- Fetches the upstream Codex usage object (rate limit windows). Returns the
--- raw upstream object; window parsing lives with the usage monitor.
+-- raw upstream object; ai.openai.UsageProtocol parses its quota windows.
 ---@return table? usage
 ---@return string? request_error
 ---@return ai.router.UsageFetchError? provider_error

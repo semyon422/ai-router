@@ -1,11 +1,9 @@
 local class = require("class")
 local coext = require("coext")
+local OpenAIUsageProtocol = require("ai.openai.UsageProtocol")
+local ZaiUsageProtocol = require("ai.zai.UsageProtocol")
 
----@class ai.router.WindowSnapshot
----@field used_percent number?
----@field used_tokens integer?
----@field quota_tokens integer?
----@field reset_at integer? unix seconds
+---@class ai.router.WindowSnapshot : openai.UsageWindow
 ---@field source "upstream"|"local"
 ---@field updated_at number unix seconds of the poll
 
@@ -26,8 +24,9 @@ local coext = require("coext")
 ---@field error ai.router.UsagePollError?
 
 -- Maintains informational channel quotas in memory. Polls upstream monitors
--- and estimates local windows from usage aggregates. Failed polls retain the
--- previous snapshot and its timestamp; none of this state affects routing.
+-- and estimates local windows from usage aggregates. Failed fetches and
+-- unusable windows retain their previous snapshots and timestamps; none of
+-- this state affects routing.
 ---@class ai.router.UsageMonitor
 ---@operator call: ai.router.UsageMonitor
 ---@field poll_status {[integer]: ai.router.UsagePollStatus}
@@ -123,69 +122,6 @@ function UsageMonitor:setChannels(channels, fetchers)
 	end
 end
 
--- Extracts the five-hour and weekly windows from an upstream Codex usage
--- object: `rate_limit.primary_window` is the 5-hour window and
--- `secondary_window` the weekly one, each with `used_percent` and `reset_at`
--- (unix seconds).
----@param usage {[string]: any}
----@return {[string]: {used_percent: number?, used_tokens: integer?, quota_tokens: integer?, reset_at: integer?}} windows
-function UsageMonitor.parseOpenAIUsage(usage)
-	local rate_limit = usage.rate_limit
-	---@type {[string]: {used_percent: number?, used_tokens: integer?, quota_tokens: integer?, reset_at: integer?}}
-	local windows = {}
-	if type(rate_limit) == "table" then
-		---@cast rate_limit {[string]: any}
-		for window_name, key in pairs({five_hour = "primary_window", weekly = "secondary_window"}) do
-			local window = rate_limit[key]
-			if type(window) == "table" then
-				---@cast window {[string]: any}
-				windows[window_name] = {
-					used_percent = type(window.used_percent) == "number" and window.used_percent or nil,
-					reset_at = type(window.reset_at) == "number" and window.reset_at or nil,
-				}
-			end
-		end
-	end
-	return windows
-end
-
--- Extracts the windows from a z.ai monitor `data` object: `unit 3/number 5`
--- is the five-hour window and `unit 6/number 1` the rolling weekly one, with
--- `percentage`, `usage` (quota), `currentValue` (consumption), and
--- `nextResetTime` (epoch milliseconds).
----@param data {[string]: any}
----@return {[string]: {used_percent: number?, used_tokens: integer?, quota_tokens: integer?, reset_at: integer?}} windows
-function UsageMonitor.parseZaiUsage(data)
-	local limits = data.limits
-	---@type {[string]: {used_percent: number?, used_tokens: integer?, quota_tokens: integer?, reset_at: integer?}}
-	local windows = {}
-	if type(limits) ~= "table" then return windows end
-	---@cast limits any[]
-	for _, limit in ipairs(limits) do
-		if type(limit) == "table" then
-			---@cast limit {[string]: any}
-			---@type ("five_hour"|"weekly")?
-			local window_name
-			if limit.unit == 3 and limit.number == 5 then
-				window_name = "five_hour"
-			elseif limit.unit == 6 and limit.number == 1 then
-				window_name = "weekly"
-			end
-			if window_name then
-				local reset_at = type(limit.nextResetTime) == "number"
-					and math.floor(limit.nextResetTime / 1000) or nil
-				windows[window_name] = {
-					used_percent = type(limit.percentage) == "number" and limit.percentage or nil,
-					used_tokens = type(limit.currentValue) == "number" and limit.currentValue or nil,
-					quota_tokens = type(limit.usage) == "number" and limit.usage or nil,
-					reset_at = reset_at,
-				}
-			end
-		end
-	end
-	return windows
-end
-
 ---@param channel ai.router.ChannelState
 ---@param window "five_hour"|"weekly"
 ---@return integer? quota
@@ -198,7 +134,7 @@ end
 
 ---@param channel ai.router.ChannelState
 ---@param window "five_hour"|"weekly"
----@param fields {used_percent: number?, used_tokens: integer?, quota_tokens: integer?, reset_at: integer?}
+---@param fields openai.UsageWindow
 ---@param source "upstream"|"local"
 ---@param now number
 function UsageMonitor:saveWindow(channel, window, fields, source, now)
@@ -279,13 +215,12 @@ function UsageMonitor:pollChannel(channel, now)
 		self:pollFailed(channel, now, code, http_status)
 		return
 	end
-	---@cast usage {[string]: any}
-	---@type {[string]: {used_percent: number?, used_tokens: integer?, quota_tokens: integer?, reset_at: integer?}}
+	---@type openai.UsageWindows
 	local windows
 	if channel.kind == "openai" then
-		windows = UsageMonitor.parseOpenAIUsage(usage)
+		windows = OpenAIUsageProtocol.parseWindows(usage)
 	elseif channel.kind == "zai" then
-		windows = UsageMonitor.parseZaiUsage(usage)
+		windows = ZaiUsageProtocol.parseWindows(usage)
 	else
 		return
 	end
