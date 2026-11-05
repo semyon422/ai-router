@@ -518,4 +518,26 @@ function test.status_exposes_safe_usage_poll_errors_with_schema_validation(t)
 	stack:close()
 end
 
+---@param t testing.T
+function test.roles_are_explicit_and_mutable_through_mcp(t)
+	local stack = Stack()
+	run(t, stack, function(client)
+		local first = call(client, "create_user", {name = "ordinary", models = {}})
+		t:eq(first.user.role, "user")
+		local admin = call(client, "create_user", {name = "operator", models = {}, role = "admin"})
+		t:eq(admin.user.role, "admin")
+		t:eq(call(client, "update_user", {id = first.user.id, role = "admin"}).user.role, "admin")
+		t:eq(call(client, "update_user", {id = first.user.id, role = "user"}).user.role, "user")
+		local invalid, invalid_err = client:callTool("router_update_user", {id = first.user.id, role = "owner"})
+		t:eq(invalid, nil)
+		t:eq(invalid_err.code, -32602)
+		t:eq(stack.users:get(first.user.id).role, "user")
+		local old_id = admin.user.id
+		call(client, "delete_user", {id = old_id})
+		local replacement = call(client, "create_user", {name = "operator", models = {}})
+		t:assert(replacement.user.id > old_id)
+	end)
+	stack:close()
+end
+
 return test

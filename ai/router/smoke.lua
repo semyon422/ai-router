@@ -12,6 +12,7 @@ local CosocketScheduler = require("web.luasocket.CosocketScheduler")
 local CosocketServer = require("web.luasocket.CosocketServer")
 local http_util = require("web.http.util")
 local Server = require("ai.router.Server")
+local ChatPages = require("ai.router.ChatPages")
 local AdminPages = require("ai.router.AdminPages")
 local Management = require("ai.router.Management")
 local McpTools = require("ai.router.McpTools")
@@ -106,14 +107,15 @@ local server = Server({
 		})
 	end,
 })
+local chat = ChatPages({users_repo = users, server = server, session_secret = "smoke-session-secret-smoke-session-secret"})
 local admin = AdminPages({
+	auth = chat,
 	users_repo = users,
 	channels_repo = channels,
 	models_repo = models,
 	usage_repo = usage_repo,
 	monitor = monitor,
 	server = server,
-	password = "admin-password-admin-password",
 	get_time = os.time,
 })
 local management = Management({users_repo = users, channels_repo = channels, models_repo = models,
@@ -123,6 +125,7 @@ assert(mcp:prepare("127.0.0.1"))
 server.mcp_server = mcp
 server:reload(channels:list(), models:list())
 server.admin_handler = function(req, res) return admin:handle(req, res) end
+server.chat_handler = function(req, res, ip) return chat:handle(req, res, ip) end
 assert(server:start("127.0.0.1", 0))
 local _, router_port = server:getAddress()
 
@@ -150,11 +153,7 @@ local function request(method, path, form, cookie)
 	return response
 end
 
--- Dashboard authentication remains available, but management uses MCP.
-local r = request("POST", "/admin/login", {password = "admin-password-admin-password"})
-assert(r.status == 303, "login failed: " .. r.status)
-local cookie = r.headers:get("Set-Cookie"):match("(router_admin=[^;]+)")
-r = request("GET", "/admin/users", nil, cookie)
+local r
 local user_key
 local mcp_thread = coext.detach(coroutine.create(function()
 	local client = McpClient({url = ("http://127.0.0.1:%d/mcp"):format(router_port), token = "smoke-management-token", scheduler = scheduler})
@@ -179,7 +178,7 @@ local mcp_thread = coext.detach(coroutine.create(function()
 	end
 	assert(#usage_repo:history(os.time()).rows == 0)
 	assert(#server.inference.request_logs_repo:list({}, os.time()) == 0)
-	local created = assert(client:callTool("router_create_user", {name = "smoke-user", models = {"local-llama/llama-70b", "native-openai/gpt-native"}}))
+	local created = assert(client:callTool("router_create_user", {name = "smoke-user", role = "admin", models = {"local-llama/llama-70b", "native-openai/gpt-native"}}))
 	assert(not created.isError, created.content[1].text)
 	user_key = created.structuredContent.api_key
 	client:close()
@@ -187,7 +186,15 @@ end))
 coroutine.resume(mcp_thread)
 while coroutine.status(mcp_thread) ~= "dead" do assert(scheduler:update(0.01)) end
 assert(user_key, "no key in MCP response")
-r = request("POST", "/admin/users", {name = "forbidden"}, cookie)
+-- The API-key session grants the administrator access to both surfaces.
+r = request("POST", "/login", {api_key = user_key})
+assert(r.status == 303, "login failed")
+local cookie = assert(r.headers:get("Set-Cookie"):match("(router_chat=[^;]+)"))
+r = request("GET", "/users", nil, cookie)
+assert(r.status == 200)
+r = request("POST", "/mcp", {ignored = "1"}, cookie)
+assert(r.status == 401, "web admin sessions must not authorize MCP")
+r = request("POST", "/users", {name = "forbidden"}, cookie)
 assert(r.status == 405, "dashboard must be read-only")
 
 -- inference through the router with the fresh key

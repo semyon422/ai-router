@@ -27,7 +27,8 @@ local LjsqliteDatabase = require("rdb.db.LjsqliteDatabase")
 ---@class ai.router.Config
 ---@field host string?
 ---@field port integer?
----@field admin_password string
+---@field session_secret string?
+---@field admin_password string? Legacy session-secret alias, not a login password.
 ---@field mcp_token string
 ---@field db_path string?
 ---@field network_path string?
@@ -53,8 +54,9 @@ assert(config_loader, ("failed to load router config %s: %s"):format(config_path
 ---@type ai.router.Config
 local config = config_loader()
 assert(type(config) == "table", "router config must return a table")
-assert(type(config.admin_password) == "string" and #config.admin_password >= 16,
-	"admin_password must contain at least 16 characters")
+local session_secret = config.session_secret or config.admin_password
+assert(type(session_secret) == "string" and #session_secret >= 16,
+	"session_secret must contain at least 16 characters")
 assert(type(config.mcp_token) == "string" and #config.mcp_token >= 32,
 	"mcp_token must contain at least 32 characters")
 
@@ -182,7 +184,9 @@ local server = Server({
 	max_requests_per_minute = config.max_requests_per_minute,
 })
 
+local chat = ChatPages({users_repo = users_repo, server = server, session_secret = session_secret})
 local admin = AdminPages({
+	auth = chat,
 	openai_login = openai_login,
 	users_repo = users_repo,
 	channels_repo = channels_repo,
@@ -190,7 +194,6 @@ local admin = AdminPages({
 	usage_repo = usage_repo,
 	monitor = monitor,
 	server = server,
-	password = assert(config.admin_password),
 })
 openai_login.on_authenticated = function(channel_id)
 	monitor:refresh(channel_id)
@@ -206,7 +209,6 @@ server.mcp_server = mcp
 server.admin_handler = function(req, res)
 	return admin:handle(req, res)
 end
-local chat = ChatPages({users_repo = users_repo, server = server, password = assert(config.admin_password)})
 server.chat_handler = function(req, res, ip)
 	return chat:handle(req, res, ip)
 end
@@ -224,10 +226,10 @@ local ok, start_err = server:start(host, port)
 assert(ok, "failed to start AI router: " .. tostring(start_err))
 local bound_host, bound_port = server:getAddress()
 print(("AI router listening on http://%s:%d"):format(assert(bound_host), assert(bound_port)))
-print(("Admin panel: http://%s:%d/admin"):format(bound_host, bound_port))
+print(("Dashboard overview: http://%s:%d/overview"):format(bound_host, bound_port))
 print(("Management MCP: http://%s:%d/mcp (bearer token required)"):format(bound_host, bound_port))
 print(("Chat Completions endpoint (GLM/compat): http://%s:%d/v1/chat/completions"):format(bound_host, bound_port))
-print(("Web chat (API-key sign-in): http://%s:%d/chat"):format(bound_host, bound_port))
+print(("Web workspace (API-key sign-in): http://%s:%d/"):format(bound_host, bound_port))
 print(("Responses endpoint (OpenAI): http://%s:%d/v1/responses"):format(bound_host, bound_port))
 if network.socks5 then
 	print(("SOCKS5 upstream routing enabled via %s:%d"):format(network.socks5.host, network.socks5.port))

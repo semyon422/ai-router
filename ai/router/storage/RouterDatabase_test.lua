@@ -8,7 +8,7 @@ function test.creates_empty_database(t)
 	local storage = RouterDatabase(LjsqliteDatabase())
 	storage.path = ":memory:"
 	storage:open()
-	t:eq(storage.db:user_version(), 8)
+	t:eq(storage.db:user_version(), 9)
 	local names = {}
 	for _, row in ipairs(storage.db:query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")) do
 		table.insert(names, row.name)
@@ -32,7 +32,7 @@ function test.migrate_is_idempotent(t)
 	storage.path = ":memory:"
 	storage:open()
 	storage:migrate()
-	t:eq(storage.db:user_version(), 8)
+	t:eq(storage.db:user_version(), 9)
 	t:eq(#storage.models.router_users:select(), 0)
 	storage:close()
 end
@@ -42,9 +42,9 @@ function test.rejects_future_version(t)
 	local storage = RouterDatabase(LjsqliteDatabase())
 	storage.path = ":memory:"
 	storage:open()
-	storage.db:user_version(9)
+	storage.db:user_version(10)
 	t:has_error(function() storage:migrate() end)
-	t:eq(storage.db:user_version(), 9)
+	t:eq(storage.db:user_version(), 10)
 	storage:close()
 end
 
@@ -168,6 +168,57 @@ function test.rejects_version_seven_without_importing_oauth_files(t)
 	t:eq(db:query("SELECT config FROM router_channels")[1].config, '{"auth_path":"legacy.lua"}')
 	t:eq(#db:query("SELECT name FROM sqlite_master WHERE name = 'router_oauth_credentials'"), 0)
 	db:close()
+end
+
+---@param t testing.T
+function test.upgrades_eight_preserving_accounts_grants_and_other_tables(t)
+	local db = LjsqliteDatabase()
+	db:open(":memory:")
+	db:exec([[CREATE TABLE router_users (id INTEGER PRIMARY KEY, name TEXT UNIQUE, key_hash TEXT UNIQUE,
+		key_hint TEXT, disabled INTEGER, max_concurrency INTEGER, max_rpm INTEGER, created_at INTEGER, updated_at INTEGER);
+		INSERT INTO router_users VALUES (7, 'existing', 'hash', 'hint', 0, 2, 10, 100, 200);
+		CREATE TABLE router_user_models (user_id INTEGER, model TEXT);
+		INSERT INTO router_user_models VALUES (7, 'model');
+		CREATE TABLE router_request_logs (id INTEGER PRIMARY KEY, user TEXT);
+		INSERT INTO router_request_logs VALUES (1, 'existing');
+		CREATE TABLE router_usage_models (requests INTEGER);
+		INSERT INTO router_usage_models VALUES (42);
+		CREATE TABLE router_oauth_credentials (generation TEXT);
+		INSERT INTO router_oauth_credentials VALUES ('unchanged');]])
+	db:user_version(8)
+	local storage = RouterDatabase(db)
+	storage:migrate()
+	t:eq(db:user_version(), 9)
+	local user = db:query("SELECT * FROM router_users")[1]
+	t:eq(user.id, 7)
+	t:eq(user.role, "user")
+	t:eq(user.key_hash, "hash")
+	t:eq(user.max_concurrency, 2)
+	t:eq(user.updated_at, 200)
+	t:eq(db:query("SELECT * FROM router_user_models")[1].user_id, 7)
+	t:eq(db:query("SELECT * FROM router_usage_models")[1].requests, 42)
+	t:eq(db:query("SELECT * FROM router_oauth_credentials")[1].generation, "unchanged")
+	t:eq(#db:query("SELECT * FROM router_request_logs"), 0)
+	db:exec("DELETE FROM router_users")
+	db:exec("INSERT INTO router_users (name, key_hash, key_hint, created_at, updated_at) VALUES ('new', 'new', 'new', 1, 1)")
+	t:assert(db:query("SELECT id FROM router_users")[1].id > 7)
+	storage:migrate()
+	t:eq(#db:query("SELECT * FROM router_users"), 1)
+	db:close()
+end
+
+---@param t testing.T
+function test.failed_upgrade_rolls_back_account_rebuild(t)
+	local storage = RouterDatabase(LjsqliteDatabase())
+	storage.path = ":memory:"
+	storage:open()
+	storage.db:exec("DROP TABLE router_request_logs")
+	storage.db:user_version(8)
+	t:has_error(function() storage:migrate() end)
+	t:eq(storage.db:user_version(), 8)
+	t:eq(#storage.db:query("SELECT name FROM sqlite_master WHERE name = 'router_users_v8'"), 0)
+	t:eq(#storage.db:query("SELECT * FROM router_users"), 0)
+	storage:close()
 end
 
 return test

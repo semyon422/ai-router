@@ -112,7 +112,7 @@ local function startStack(opts)
 	}, {}, 1000)
 	models:create("lite", "zai-1/glm-5.3", nil, 1000)
 	server:reload(channels:list(), models:list())
-	local chat = ChatPages({users_repo = users, server = server, password = PASSWORD})
+	local chat = ChatPages({users_repo = users, server = server, session_secret = PASSWORD})
 	server.chat_handler = function(req, res, ip) return chat:handle(req, res, ip) end
 	local stack = {
 		storage = storage,
@@ -236,7 +236,7 @@ end
 ---@return string cookie
 ---@return string csrf
 local function signIn(t, stack, key)
-	local response = request(t, stack, "/chat/login", {api_key = key})
+	local response = request(t, stack, "/login", {api_key = key})
 	t:eq(response.status, 303)
 	t:assert(response.set_cookie)
 	local cookie = assert(response.set_cookie):match("^router_chat=([^;]+)")
@@ -250,22 +250,22 @@ end
 ---@param t testing.T
 function test.login_page_then_session_and_model_list(t)
 	local stack = startStack()
-	local response = request(t, stack, "/chat")
+	local response = request(t, stack, "/login")
 	t:eq(response.status, 200)
 	t:assert(response.body:find("API key", 1, true))
 	t:eq(response.body:find(TOKEN, 1, true), nil)
 
-	response = request(t, stack, "/chat/login", {api_key = "wrong-key-wrong"})
+	response = request(t, stack, "/login", {api_key = "wrong-key-wrong"})
 	t:eq(response.status, 401)
 	t:assert(response.body:find("Invalid API key", 1, true))
 	-- Missing key field.
-	response = request(t, stack, "/chat/login", {csrf_token = "irrelevant"})
+	response = request(t, stack, "/login", {csrf_token = "irrelevant"})
 	t:eq(response.status, 401)
 	t:assert(response.body:find("Invalid API key", 1, true))
 	t:eq(response.set_cookie, nil)
 	-- A disabled user cannot sign in.
 	stack.users:update(stack.user.id, {disabled = true}, 1001)
-	response = request(t, stack, "/chat/login", {api_key = TOKEN})
+	response = request(t, stack, "/login", {api_key = TOKEN})
 	t:eq(response.status, 401)
 	t:assert(response.body:find("Invalid API key", 1, true))
 	stack.users:update(stack.user.id, {disabled = false}, 1002)
@@ -464,7 +464,7 @@ function test.session_and_csrf_boundaries(t)
 	t:eq(response.status, 405)
 	response = request(t, stack, "/chat", nil, {cookie = cookie, method = "POST"})
 	t:eq(response.status, 405)
-	response = request(t, stack, "/chat/login", nil, {method = "GET"})
+	response = request(t, stack, "/login", nil, {method = "DELETE"})
 	t:eq(response.status, 405)
 	response = request(t, stack, "/chat/nope")
 	t:eq(response.status, 404)
@@ -474,11 +474,11 @@ end
 ---@param t testing.T
 function test.disable_delete_and_key_rotation_revoke_sessions(t)
 	local stack = startStack()
-	local cookie = request(t, stack, "/chat/login", {api_key = TOKEN}).set_cookie:match("^router_chat=([^;]+)")
+	local cookie = request(t, stack, "/login", {api_key = TOKEN}).set_cookie:match("^router_chat=([^;]+)")
 	t:assert(cookie)
 
 	stack.users:update(stack.user.id, {disabled = true}, 1001)
-	local response = request(t, stack, "/chat", nil, {cookie = cookie})
+	local response = request(t, stack, "/login", nil, {cookie = cookie})
 	t:eq(response.status, 200)
 	t:assert(response.body:find("no longer valid", 1, true))
 	t:assert(response.set_cookie ~= nil)
@@ -496,7 +496,7 @@ function test.disable_delete_and_key_rotation_revoke_sessions(t)
 
 	-- Key rotation invalidates the existing session but a fresh login works.
 	stack.users:regenerateKey(stack.user.id, 1003)
-	response = request(t, stack, "/chat", nil, {cookie = cookie})
+	response = request(t, stack, "/login", nil, {cookie = cookie})
 	t:eq(response.status, 200)
 	t:eq(response.body:find('id="chat-messages"', 1, true), nil)
 	t:assert(response.body:find("API key", 1, true))
@@ -517,7 +517,7 @@ function test.full_key_rotation_revokes_sessions_even_when_hints_match(t)
 		json.encode({model = "lite", messages = {{role = "user", content = "hi"}}}),
 		{cookie = cookie, csrf = csrf})
 	t:eq(response.status, 401)
-	response = request(t, stack, "/chat", nil, {cookie = cookie})
+	response = request(t, stack, "/login", nil, {cookie = cookie})
 	t:assert(response.body:find("no longer valid", 1, true))
 	local fresh_cookie = signIn(t, stack, new_key)
 	local session = stack.chat.sessions:decode(fresh_cookie)
@@ -527,10 +527,10 @@ function test.full_key_rotation_revokes_sessions_even_when_hints_match(t)
 	t:eq(session.key_fingerprint == stack.users:get(stack.user.id).key_hash, false)
 	-- Legacy hint-only sessions must not remain valid after the upgrade.
 	local legacy_cookie = stack.chat.sessions:encode({user_id = stack.user.id, key_hint = old_user.key_hint})
-	response = request(t, stack, "/chat", nil, {cookie = legacy_cookie})
+	response = request(t, stack, "/login", nil, {cookie = legacy_cookie})
 	t:assert(response.body:find("no longer valid", 1, true))
 	stack.users:delete(stack.user.id)
-	response = request(t, stack, "/chat", nil, {cookie = fresh_cookie})
+	response = request(t, stack, "/login", nil, {cookie = fresh_cookie})
 	t:assert(response.body:find("no longer valid", 1, true))
 	stop(stack)
 end
@@ -553,16 +553,16 @@ function test.logout_with_csrf_clears_cookie(t)
 	local stack = startStack()
 	local cookie, csrf = signIn(t, stack, TOKEN)
 	-- Invalid CSRF keeps the session.
-	local response = request(t, stack, "/chat/logout", {csrf_token = "bad"}, {cookie = cookie})
+	local response = request(t, stack, "/logout", {csrf_token = "bad"}, {cookie = cookie})
 	t:eq(response.status, 403)
 	response = request(t, stack, "/chat", nil, {cookie = cookie})
 	t:assert(response.body:find("alice", 1, true))
 	-- Valid CSRF clears it.
-	response = request(t, stack, "/chat/logout", {csrf_token = csrf}, {cookie = cookie})
+	response = request(t, stack, "/logout", {csrf_token = csrf}, {cookie = cookie})
 	t:eq(response.status, 303)
 	t:assert(response.set_cookie:find("Max-Age=0", 1, true))
 	-- A browser that honored the cleared cookie is back on the login page.
-	response = request(t, stack, "/chat")
+	response = request(t, stack, "/login")
 	t:eq(response.status, 200)
 	t:eq(response.body:find('id="chat-messages"', 1, true), nil)
 	t:assert(response.body:find("API key", 1, true))
@@ -579,7 +579,7 @@ function test.user_without_chat_models_gets_a_notice(t)
 	local bob, bob_key = stack.users:create("bob", 1002)
 	stack.users:setGrants(bob.id, {"native-1/gpt-6-luna"})
 	stack.server:reload(stack.channels:list(), stack.models:list())
-	local response = request(t, stack, "/chat/login", {api_key = bob_key})
+	local response = request(t, stack, "/login", {api_key = bob_key})
 	t:eq(response.status, 303)
 	local cookie = assert(response.set_cookie):match("^router_chat=([^;]+)")
 	response = request(t, stack, "/chat", nil, {cookie = cookie})
@@ -590,6 +590,19 @@ function test.user_without_chat_models_gets_a_notice(t)
 	t:assert(textarea_attributes:find("disabled", 1, true))
 	t:eq(textarea_content, "")
 	t:eq(native.complete_count + native.stream_count, 0)
+	stop(stack)
+end
+
+---@param t testing.T
+function test.login_is_separate_from_chat_and_old_auth_urls_are_removed(t)
+	local stack = startStack()
+	t:eq(request(t, stack, "/chat").status, 303)
+	local cookie = signIn(t, stack, TOKEN)
+	t:eq(request(t, stack, "/login", nil, {cookie = cookie}).status, 303)
+	for _, path in ipairs({"/chat/login", "/chat/logout"}) do
+		t:eq(request(t, stack, path, nil, {cookie = cookie}).status, 404)
+		t:eq(request(t, stack, path, {ignored = "1"}, {cookie = cookie}).status, 404)
+	end
 	stop(stack)
 end
 

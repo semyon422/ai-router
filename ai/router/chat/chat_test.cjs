@@ -217,7 +217,7 @@ test('a 401 session bounce redirects to the chat page', async () => {
 	view.requests[0].resolve({ok: false, status: 401, text: () => Promise.resolve('{}')});
 	await settle();
 	await settle();
-	assert.equal(view.contextWindow.location.href, '/chat');
+	assert.equal(view.contextWindow.location.href, '/login');
 });
 
 test('clicking Stop aborts the stream without an error', async () => {

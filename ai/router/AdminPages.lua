@@ -6,21 +6,17 @@ local io_util = require("io_util")
 local admin_dir = debug.getinfo(1, "S").source:match("^@?(.+)/[^/]+$") .. "/admin"
 local http_util = require("web.http.util")
 local json = require("web.json")
-local Sessions = require("web.framework.Sessions")
 local UsageDashboardGenerator = require("ai.router.UsageDashboardGenerator")
 
 ---@class ai.router.AdminPages: ai.router.AdminPagesOptions
 ---@operator call: ai.router.AdminPages
----@field sessions web.Sessions
----@field password string
+---@field auth ai.router.ChatPages
 ---@field stylesheet string
 ---@field overview_script string
 ---@field usage_script string
 ---@field theme_script string
 ---@field templates {[string]: fun(env: table?): string}
 local AdminPages = class()
-
-AdminPages.cookie_max_age = 10 * 365 * 24 * 3600
 
 ---@class ai.router.AdminPagesOptions
 ---@field users_repo ai.router.UsersRepo
@@ -31,11 +27,11 @@ AdminPages.cookie_max_age = 10 * 365 * 24 * 3600
 ---@field server ai.router.Server
 ---@field openai_login ai.router.OpenAILoginManager?
 ---@field get_time (fun(): integer)?
----@field password string
+---@field auth ai.router.ChatPages
 
 ---@param options ai.router.AdminPagesOptions
 function AdminPages:new(options)
-	assert(type(options.password) == "string" and #options.password >= 16, "admin password must contain at least 16 characters")
+	self.auth = assert(options.auth, "shared web authentication is required")
 	self.users_repo = options.users_repo
 	self.channels_repo = options.channels_repo
 	self.models_repo = options.models_repo
@@ -43,15 +39,13 @@ function AdminPages:new(options)
 	self.monitor = options.monitor
 	self.server = options.server
 	self.openai_login = options.openai_login
-	self.password = options.password
 	self.get_time = options.get_time or os.time
-	self.sessions = Sessions("router_admin", options.password, false)
 	self.stylesheet = io_util.read_file(admin_dir .. "/dashboard.css")
 	self.overview_script = io_util.read_file(admin_dir .. "/overview.js")
 	self.usage_script = io_util.read_file(admin_dir .. "/usage.js")
 	self.theme_script = io_util.read_file(admin_dir .. "/theme.js")
 	self.templates = {}
-	for _, name in ipairs({"layout", "login", "overview", "users", "channels", "models", "usage", "requests"}) do
+	for _, name in ipairs({"layout", "home", "overview", "users", "channels", "models", "usage", "requests"}) do
 		self.templates[name] = etlua.compile(io_util.read_file(admin_dir .. "/" .. name .. ".etlua"), "@" .. name)
 	end
 end
@@ -91,9 +85,9 @@ end
 
 ---@param req web.Request
 ---@return table?
+---@return ai.router.UserRow?
 function AdminPages:session(req)
-	local session = self.sessions:get(req.headers)
-	if session then return session end
+	return self.auth:session(req)
 end
 
 ---@param req web.Request
@@ -101,32 +95,17 @@ end
 ---@return boolean
 function AdminPages:handle(req, res)
 	local path = req.uri:match("^[^?]+") or req.uri
-	if path ~= "/admin" and not path:match("^/admin/") then return false end
-	if path == "/admin" or path == "/admin/login" then
-		if req.method == "POST" and path == "/admin/login" then
-			local form = http_util.get_form(req) or {}
-			if form.password == self.password then
-				self.sessions:set(res.headers, {}, AdminPages.cookie_max_age)
-				redirect(res, "/admin/overview")
-			else
-				send(res, 401, self.templates.login({error_message = "Invalid password.", stylesheet = self.stylesheet, theme_script = self.theme_script}))
-			end
-		elseif req.method == "GET" then
-			if path == "/admin" and self:session(req) then
-				redirect(res, "/admin/overview")
-			else
-				send(res, 200, self.templates.login({stylesheet = self.stylesheet, theme_script = self.theme_script}))
-			end
-		else
-			res.headers:set("Allow", "GET")
-			send(res, 405, "Read-only dashboard. Manage the router through MCP.")
-		end
-		return true
-	end
-	local session = self:session(req)
-	if path == "/admin/overview/data" then
+	local pages = {["/"] = self.pageHome, ["/overview"] = self.pageOverview,
+		["/users"] = self.pageUsers, ["/channels"] = self.pageChannels,
+		["/models"] = self.pageModels, ["/usage"] = self.pageUsage,
+		["/requests"] = self.pageRequests}
+	if not pages[path] and path ~= "/overview/data" then return false end
+	local session, user = self:session(req)
+	if path == "/overview/data" then
 		if not session then
 			sendJson(res, 401, {error = "Sign in to view the dashboard."})
+		elseif user.role ~= "admin" then
+			sendJson(res, 403, {error = "Administrator access required."})
 		elseif req.method ~= "GET" then
 			res.headers:set("Allow", "GET")
 			sendJson(res, 405, {error = "Read-only dashboard."})
@@ -137,18 +116,12 @@ function AdminPages:handle(req, res)
 		return true
 	end
 	if not session then
-		if req.method == "GET" then redirect(res, "/admin")
-		else send(res, 403, "Sign in to view the dashboard.") end
+		if req.method == "GET" then redirect(res, "/login")
+		else send(res, 403, "Sign in with your API key.") end
 		return true
 	end
-	if req.method == "POST" and path == "/admin/logout" then
-		local form = http_util.get_form(req) or {}
-		if not self.sessions:validate_csrf_token(session, form.csrf_token) then
-			send(res, 403, "Invalid CSRF token.")
-		else
-			res.headers:add("Set-Cookie", "router_admin=; Path=/; Max-Age=0")
-			redirect(res, "/admin")
-		end
+	if user.role ~= "admin" and path ~= "/requests" and path ~= "/" then
+		send(res, 403, "Administrator access required.")
 		return true
 	end
 	if req.method ~= "GET" then
@@ -157,16 +130,7 @@ function AdminPages:handle(req, res)
 		return true
 	end
 	local query = http_util.decode_query_string(req.uri:match("%?(.+)$") or "")
-	if path == "/admin/subscriptions" or path == "/admin/status" then
-		redirect(res, "/admin/channels")
-		return true
-	end
-	local pages = { ["/admin/overview"] = self.pageOverview,
-		["/admin/users"] = self.pageUsers, ["/admin/channels"] = self.pageChannels,
-		["/admin/models"] = self.pageModels, ["/admin/usage"] = self.pageUsage,
-		["/admin/requests"] = self.pageRequests }
-	if pages[path] then pages[path](self, res, session, query)
-	else send(res, 404, "Unknown admin page.") end
+	pages[path](self, res, session, query)
 	return true
 end
 
@@ -176,6 +140,7 @@ end
 ---@param content string
 function AdminPages:render(res, session, title, content)
 	send(res, 200, self.templates.layout({title = title, content = content, csrf_token = session.csrf_token,
+		user = assert(self.users_repo:get(session.user_id)),
 		stylesheet = self.stylesheet, theme_script = self.theme_script,
 		page_script = title == "Overview" and self.overview_script or title == "Usage" and self.usage_script or ""}))
 end
@@ -217,6 +182,12 @@ function AdminPages:overviewData()
 	for _ in pairs(public_models) do model_count = model_count + 1 end
 	return {channels = channels, enabled_count = enabled, model_count = model_count,
 		user_count = #self.users_repo:list(), now = self.get_time()}
+end
+
+---@param res web.Response
+---@param session {csrf_token: string}
+function AdminPages:pageHome(res, session)
+	self:render(res, session, "Home", self.templates.home({user = assert(self.users_repo:get(session.user_id))}))
 end
 
 ---@param res web.Response
@@ -273,6 +244,8 @@ end
 function AdminPages:pageRequests(res, session, query)
 	---@type ai.router.RequestLogFilters
 	local filters = {}
+	local user = assert(self.users_repo:get(session.user_id))
+	if user.role ~= "admin" then filters.user_id = user.id end
 	for _, key in ipairs({"user", "model", "channel"}) do
 		local value = query[key]
 		if value and #value <= 193 and value ~= "" then filters[key] = value end
@@ -294,7 +267,7 @@ function AdminPages:pageRequests(res, session, query)
 	---@return string
 	local function url(values)
 		local encoded = http_util.encode_query_string(values)
-		return "/admin/requests" .. (encoded ~= "" and "?" .. encoded or "")
+		return "/requests" .. (encoded ~= "" and "?" .. encoded or "")
 	end
 	local latest_url = url(params)
 	---@type {label: string, value: string, remove_url: string}[]
@@ -314,7 +287,7 @@ function AdminPages:pageRequests(res, session, query)
 		older_url = url(params)
 	end
 	self:render(res, session, "Requests", self.templates.requests({rows = rows, filters = filters,
-		options = repo:filterOptions(now), active_filters = active_filters, latest_url = latest_url,
+		options = repo:filterOptions(now, filters.user_id), active_filters = active_filters, latest_url = latest_url,
 		older_url = older_url, max_rows = repo.max_rows, page_size = repo.page_size, retention_days = repo.retention_seconds / 86400}))
 end
 

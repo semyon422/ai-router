@@ -48,8 +48,9 @@ function Stack:new()
 	self.server:reload({}, {})
 	local options = {users_repo = self.users, channels_repo = self.channels, models_repo = self.models,
 		usage_repo = self.usage_repo, monitor = self.monitor, server = self.server, password = self.password}
+	self.chat = ChatPages({users_repo = self.users, server = self.server, session_secret = self.password})
+	options.auth = self.chat
 	self.admin = AdminPages(options)
-	self.chat = ChatPages({users_repo = self.users, server = self.server, password = self.password})
 	self.management = Management(options)
 	self.server.admin_handler = function(req, res) return self.admin:handle(req, res) end
 	self.server.chat_handler = function(req, res, ip) return self.chat:handle(req, res, ip) end

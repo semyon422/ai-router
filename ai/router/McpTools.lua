@@ -19,6 +19,7 @@ local model_name = {type = "string"}
 local models = {type = "array", items = model_name, maxItems = 1024}
 local positive = {type = "integer", minimum = 1}
 local flag = {type = "boolean"}
+local role = {type = "string", enum = {"user", "admin"}}
 local text = {type = "string"}
 local config = object({
 	models = models, base_url = text, api_key = text, usage_url = text,
@@ -60,8 +61,8 @@ function McpTools.create(management)
 	add("router_list_models", "listModels", "List public models and aliases with their single concrete model target.", object({}))
 	add("router_status", "status", "Read display-only usage windows, freshness timestamps, and OAuth status.", object({}))
 	add("router_usage", "usage", "Read hourly usage and cost aggregates for the last 24 or 168 hours. No message content.", object({hours = {type = "integer", enum = {24, 168}}}))
-	add("router_create_user", "createUser", "Create a user with model grants. Returns a new API key ONCE: treat the result as a secret.", object({name = name, models = models}, {"name", "models"}), true)
-	add("router_update_user", "updateUser", "Patch a user: rename, disable/enable, replace grants, or set positive concurrency/RPM limits. Omitted fields are unchanged.", object({id = id, name = name, models = models, disabled = flag, max_concurrency = positive, max_rpm = positive}, {"id"}), true, true)
+	add("router_create_user", "createUser", "Create a user with model grants and optional user/admin role (default user). Returns a new API key ONCE: treat the result as a secret.", object({name = name, models = models, role = role}, {"name", "models"}), true)
+	add("router_update_user", "updateUser", "Patch a user: rename, set user/admin role, disable/enable, replace grants, or set positive concurrency/RPM limits. Role changes apply immediately to web sessions. Omitted fields are unchanged.", object({id = id, name = name, role = role, models = models, disabled = flag, max_concurrency = positive, max_rpm = positive}, {"id"}), true, true)
 	add("router_regenerate_key", "regenerateKey", "Revoke the user's current key and return a replacement ONCE. Treat the result as a secret.", object({id = id}, {"id"}), true, true)
 	add("router_delete_user", "deleteUser", "Delete a user and all grants; immediately revoke access.", object({id = id}, {"id"}), true, true)
 	add("router_save_channel", "saveChannel", "Create (omit id) or patch a channel. Creation requires name, kind, config.models and kind-specific credentials/URL. Name is the public channel/model prefix (letters, digits, ._-); renaming changes client model names. OpenAI OAuth credentials are stored privately in SQLite per channel, never supplied or returned here. Config fields are merged on same-kind edits, preserving unreadable credentials; limits replace the entire limits object. Omitted fields remain unchanged. Catalog is validated before saving; pending OAuth blocks edits.", object({id = id, name = name,

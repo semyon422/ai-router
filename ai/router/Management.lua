@@ -33,6 +33,7 @@ local Management = class()
 ---@field error string?
 
 ---@class ai.router.PublicUser
+---@field role "user"|"admin"
 ---@field id integer
 ---@field name string
 ---@field key_hint string
@@ -177,7 +178,7 @@ end
 ---@param row ai.router.UserRow
 ---@return ai.router.PublicUser
 function Management:publicUser(row)
-	return {id = row.id, name = row.name, key_hint = row.key_hint, disabled = row.disabled,
+	return {id = row.id, name = row.name, role = row.role, key_hint = row.key_hint, disabled = row.disabled,
 		max_concurrency = row.max_concurrency, max_rpm = row.max_rpm,
 		created_at = row.created_at, updated_at = row.updated_at,
 		models = json.array(self.users_repo:getGrants(row.id))}
@@ -284,9 +285,11 @@ end
 ---@return {user: ai.router.PublicUser, api_key: string}
 function Management:createUser(args)
 	checkName(args.name, "User")
+	check(args.role == nil or args.role == "user" or args.role == "admin", "Role must be user or admin.")
 	checkGrants(args.models)
 	check(not self.users_repo:findByName(args.name), "User name already exists.")
 	local user, key = self.users_repo:create(args.name, self.get_time())
+	if args.role then user = self.users_repo:update(user.id, {role = args.role}, self.get_time()) end
 	self.users_repo:setGrants(user.id, args.models)
 	return {user = self:publicUser(user), api_key = key}
 end
@@ -295,13 +298,14 @@ end
 ---@return {user: ai.router.PublicUser}
 function Management:updateUser(args)
 	check(self.users_repo:get(args.id), "User not found.")
+	check(args.role == nil or args.role == "user" or args.role == "admin", "Role must be user or admin.")
 	if args.name then
 		checkName(args.name, "User")
 		local existing = self.users_repo:findByName(args.name)
 		check(not existing or existing.id == args.id, "User name already exists.")
 	end
 	if args.models then checkGrants(args.models) end
-	local user = self.users_repo:update(args.id, {name = args.name, disabled = args.disabled,
+	local user = self.users_repo:update(args.id, {name = args.name, role = args.role, disabled = args.disabled,
 		max_concurrency = args.max_concurrency, max_rpm = args.max_rpm}, self.get_time())
 	if args.models then self.users_repo:setGrants(args.id, args.models) end
 	return {user = self:publicUser(user)}

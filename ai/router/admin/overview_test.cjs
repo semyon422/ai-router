@@ -65,7 +65,7 @@ test('polls every 30 seconds with same-origin cookies and prevents overlapping r
 	view.poll();
 	assert.equal(view.requests.length, 1);
 	const req = view.requests[0];
-	assert.equal(req.url, '/admin/overview/data');
+	assert.equal(req.url, '/overview/data');
 	assert.equal(req.options.credentials, 'same-origin');
 	assert.equal(req.options.cache, 'no-store');
 	assert.equal(req.options.redirect, 'error');

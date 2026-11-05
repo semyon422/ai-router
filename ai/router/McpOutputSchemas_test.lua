@@ -11,7 +11,7 @@ function test.required_payloads_and_redaction(t)
 	t:assert(JsonSchema.validate(schema, {users = json.array({})}))
 	t:eq(JsonSchema.validate(schema, {}), nil)
 	t:eq(JsonSchema.validate(schema, {users = json.object({})}), nil)
-	local user = {id = 1, name = "user", key_hint = "abcd", disabled = false,
+	local user = {id = 1, name = "user", role = "user", key_hint = "abcd", disabled = false,
 		created_at = 1, updated_at = 1, models = {"model"}}
 	t:assert(JsonSchema.validate(schema, {users = {user}}))
 	user.key_hash = "SECRET"

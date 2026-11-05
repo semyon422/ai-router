@@ -1,8 +1,8 @@
 return {
 	host = "127.0.0.1",
 	port = 28083,
-	-- Admin panel password (at least 16 characters).
-	admin_password = "replace-with-a-long-random-password",
+	-- Web-session HMAC secret (at least 16 random characters), not a login password.
+	session_secret = "replace-with-a-long-random-session-secret",
 	-- Privileged management API: separate token, at least 32 random characters.
 	mcp_token = "replace-with-a-separate-random-management-token",
 	db_path = "userdata/ai_router.db",

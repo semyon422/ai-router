@@ -5,7 +5,7 @@
 <div class="metric"><dt>Users</dt><dd><%= user_count %></dd></div>
 </dl>
 <section aria-labelledby="channel-heading">
-<div class="section-heading"><div><h2 id="channel-heading">Channel overview</h2><p class="muted">Usage windows and the latest monitoring status.</p></div><a href="/admin/channels">View channel details →</a></div>
+<div class="section-heading"><div><h2 id="channel-heading">Channel overview</h2><p class="muted">Usage windows and the latest monitoring status.</p></div><a href="/channels">View channel details →</a></div>
 <% if #channels == 0 then %>
 <div class="empty-state"><h3>No channels yet</h3><p class="muted">Connect a subscription or compatible endpoint through MCP to get started.</p><code>router_save_channel</code></div>
 <% else %>

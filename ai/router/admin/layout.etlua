@@ -10,10 +10,11 @@
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
 <header class="topbar">
-<a class="brand" href="/admin/overview"><span class="brand-mark" aria-hidden="true">R</span>AI Router <span class="badge">Console</span></a>
+<a class="brand" href="/"><span class="brand-mark" aria-hidden="true">R</span>AI Router</a>
 <div class="toolbar">
+<span class="chat-user"><%= user.name %></span>
 <label class="theme-control">Theme <select id="theme" aria-label="Color theme"><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
-<form class="inline" method="post" action="/admin/logout">
+<form class="inline" method="post" action="/logout">
 <input type="hidden" name="csrf_token" value="<%= csrf_token %>">
 <button class="quiet" type="submit">Sign out</button>
 </form>
@@ -22,21 +23,30 @@
 <div class="shell">
 <nav class="sidebar" aria-label="Main navigation">
 <p class="eyebrow">Workspace</p>
-<% for _, item in ipairs({{"Overview", "overview"}, {"Channels", "channels"}, {"Usage", "usage"}, {"Requests", "requests"}, {"Models", "models"}, {"Users", "users"}}) do %>
-<a href="/admin/<%= item[2] %>"<% if title == item[1] then %> aria-current="page"<% end %>><%= item[1] %></a>
+<a href="/"<% if title == "Home" then %> aria-current="page"<% end %>>Home</a>
+<a href="/chat"<% if title == "Chat" then %> aria-current="page"<% end %>>Chat</a>
+<a href="/requests"<% if title == "Requests" then %> aria-current="page"<% end %>>Requests</a>
+<% if user.role == "admin" then %>
+<% for _, item in ipairs({{"Overview", "overview"}, {"Channels", "channels"}, {"Usage", "usage"}, {"Models", "models"}, {"Users", "users"}}) do %>
+<a href="/<%= item[2] %>"<% if title == item[1] then %> aria-current="page"<% end %>><%= item[1] %></a>
 <% end %>
-<div class="sidebar-note"><span class="badge">Read-only</span><p>Manage your router through MCP. Credentials stay off this dashboard.</p></div>
+<div class="sidebar-note"><span class="badge">Read-only dashboard</span><p>Manage your router through MCP. Credentials stay off this dashboard.</p></div>
+<% end %>
 </nav>
-<main id="main" tabindex="-1">
-<header class="page-heading"><div><p class="eyebrow">Router workspace</p><h1><%= title %></h1><p class="muted">Read-only dashboard. Manage users, channels, models, and authorization through MCP.</p></div></header>
+<main id="main" tabindex="-1"<% if title == "Chat" then %> class="chat-main"<% end %>>
+<% if title == "Chat" then %>
+<%- content %>
+<% else %>
+<header class="page-heading"><div><p class="eyebrow">Router workspace</p><h1><%= title %></h1><p class="muted"><%= user.role == "admin" and title ~= "Home" and "Read-only dashboard. Manage users, channels, models, and authorization through MCP." or title == "Home" and "Choose where to start." or "Your request metadata. Conversations stay in your browser." %></p></div></header>
 <% if title == "Overview" then %>
 <div class="live-toolbar" aria-label="Overview updates">
-<div><span id="overview-status" class="muted">Snapshot from page load. Enable JavaScript for automatic updates.</span><p id="overview-error" class="error" role="status"></p><a id="overview-sign-in" href="/admin/login" hidden>Sign in again →</a></div>
+<div><span id="overview-status" class="muted">Snapshot from page load. Enable JavaScript for automatic updates.</span><p id="overview-error" class="error" role="status"></p><a id="overview-sign-in" href="/login" hidden>Sign in again →</a></div>
 <button id="overview-refresh" type="button" hidden>Refresh now</button>
 </div>
 <% end %>
-<div id="page-content" class="page-content<% if title ~= "Overview" and title ~= "Usage" and title ~= "Requests" then %> scroll<% end %>"><%- content %></div>
-<footer><%= title == "Overview" and "Overview updates every 30 seconds while this tab is visible. Without JavaScript, reload for new data." or "Snapshot from this page load. Reload to see the latest data." %> Quotas never change routing.</footer>
+<div id="page-content" class="page-content<% if title ~= "Home" and title ~= "Overview" and title ~= "Usage" and title ~= "Requests" then %> scroll<% end %>"><%- content %></div>
+<% if title ~= "Home" then %><footer><%= title == "Overview" and "Overview updates every 30 seconds while this tab is visible. Without JavaScript, reload for new data." or "Snapshot from this page load. Reload to see the latest data." %><% if user.role == "admin" then %> Quotas never change routing.<% end %></footer><% end %>
+<% end %>
 </main>
 </div>
 <% if page_script and page_script ~= "" then %><script><%- page_script %></script><% end %>

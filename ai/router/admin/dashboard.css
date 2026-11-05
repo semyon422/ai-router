@@ -43,6 +43,7 @@ h3 { font-size: 16px; }
 .topbar { min-height: 78px; padding: 16px 32px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
 .brand { display: flex; align-items: center; gap: 12px; font-weight: 700; font-size: 18px; text-decoration: none; color: var(--text); }
 .brand-mark { width: 34px; height: 34px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); border: 1px solid var(--line); border-radius: 10px; }
+.chat-user { font-size: 13px; font-weight: 600; }
 .toolbar { display: flex; gap: 16px; align-items: center; }
 .theme-control { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .theme-control select { padding: 6px 8px; }

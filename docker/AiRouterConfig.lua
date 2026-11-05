@@ -8,8 +8,10 @@ function AiRouterConfig.validate(config)
 	assert(config.host == "127.0.0.1" and config.port == 28083, "Compose router must listen on 127.0.0.1:28083")
 	assert(config.db_path == "/router-state/router.db", "Compose router database must use its persistent mount")
 	assert(config.network_path == "/router-state/network.lua", "Compose router network config must use its persistent mount")
-	assert(type(config.admin_password) == "string" and #config.admin_password >= 16
-		and config.admin_password ~= "REPLACE_WITH_RANDOM_ADMIN_PASSWORD", "Set a random router admin password")
+	local secret = config.session_secret or config.admin_password
+	assert(type(secret) == "string" and #secret >= 16
+		and secret ~= "REPLACE_WITH_RANDOM_ADMIN_PASSWORD"
+		and secret ~= "REPLACE_WITH_RANDOM_SESSION_SECRET", "Set a random router session secret")
 	assert(type(config.mcp_token) == "string" and #config.mcp_token >= 32
 		and config.mcp_token ~= "REPLACE_WITH_RANDOM_MCP_TOKEN", "Set a random router MCP token")
 end

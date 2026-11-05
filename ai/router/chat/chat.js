@@ -174,7 +174,7 @@
 				return;
 			}
 			if (response.status === 401) {
-				window.location.href = "/chat";
+				window.location.href = "/login";
 				return;
 			}
 			if (!response.ok) {

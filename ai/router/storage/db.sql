@@ -1,6 +1,7 @@
 CREATE TABLE router_users (
-	id INTEGER PRIMARY KEY,
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	name TEXT NOT NULL UNIQUE,
+	role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin')),
 	key_hash TEXT NOT NULL UNIQUE,
 	key_hint TEXT NOT NULL,
 	disabled INTEGER NOT NULL DEFAULT 0,
@@ -64,6 +65,7 @@ CREATE INDEX router_usage_channel_bucket ON router_usage_models (channel, bucket
 
 CREATE TABLE router_request_logs (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	user_id INTEGER NOT NULL,
 	created_at INTEGER NOT NULL,
 	user TEXT NOT NULL,
 	model TEXT NOT NULL,
@@ -83,3 +85,4 @@ CREATE TABLE router_request_logs (
 );
 
 CREATE INDEX router_request_logs_created_at ON router_request_logs (created_at);
+CREATE INDEX router_request_logs_user_id ON router_request_logs (user_id, id);

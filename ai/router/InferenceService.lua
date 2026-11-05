@@ -499,7 +499,7 @@ function InferenceService:finalize(user, context)
 	end
 	if not user.disabled then
 		local logged = pcall(function()
-			self.request_logs_repo:record({created_at = context.created_at, user = user.name,
+			self.request_logs_repo:record({created_at = context.created_at, user_id = user.id, user = user.name,
 				model = request and type(request.model) == "string" and request.model:sub(1, 193) or "",
 				channel = result and result.channel or "",
 				upstream_model = result and result.upstream_model or "",

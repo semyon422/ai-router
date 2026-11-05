@@ -110,6 +110,11 @@ function Server:handle(req, res, ip)
 	if self.admin_handler and self.admin_handler(req, res) then return end
 	if self.chat_handler and self.chat_handler(req, res, ip) then return end
 	local metrics = RequestMetrics(self.get_time)
+	if path ~= "/v1/models" and path ~= "/v1/chat/completions" and path ~= "/v1/responses" then
+		ResponseWriter.sendError(res, 404, "route not found", "invalid_request_error", "not_found")
+		self:logRequest(ip, nil, req.method, path, 404, self.get_time() - metrics.started_at)
+		return
+	end
 	local token = self:authenticate(req)
 	local user = token and self.users_repo:findByKeyHash(digest.hash("sha256", token, true)) or nil
 	---@type integer

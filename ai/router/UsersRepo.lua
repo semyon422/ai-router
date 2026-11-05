@@ -7,6 +7,7 @@ local random = require("web.random")
 ---@field name string
 ---@field key_hash string
 ---@field key_hint string
+---@field role "user"|"admin"
 ---@field disabled boolean
 ---@field max_concurrency integer?
 ---@field max_rpm integer?
@@ -63,6 +64,7 @@ function UsersRepo:create(name, now)
 		name = name,
 		key_hash = key_hash,
 		key_hint = key_hint,
+		role = "user",
 		disabled = false,
 		created_at = now,
 		updated_at = now,
@@ -108,6 +110,7 @@ end
 
 ---@class ai.router.UserChanges
 ---@field name string?
+---@field role "user"|"admin"?
 ---@field disabled boolean?
 ---@field max_concurrency integer?
 ---@field max_rpm integer?
@@ -118,6 +121,7 @@ end
 ---@return ai.router.UserRow
 function UsersRepo:update(id, changes, now)
 	if changes.name ~= nil then assertName(changes.name) end
+	assert(changes.role == nil or changes.role == "user" or changes.role == "admin", "role must be user or admin")
 	assert(changes.disabled == nil or type(changes.disabled) == "boolean", "disabled must be a boolean")
 	if changes.max_concurrency ~= nil then
 		assertPositiveInteger(changes.max_concurrency, "max_concurrency")
@@ -127,6 +131,7 @@ function UsersRepo:update(id, changes, now)
 	end
 	local row = {updated_at = now}
 	if changes.name ~= nil then row.name = changes.name end
+	if changes.role ~= nil then row.role = changes.role end
 	if changes.disabled ~= nil then row.disabled = changes.disabled end
 	if changes.max_concurrency ~= nil then row.max_concurrency = changes.max_concurrency end
 	if changes.max_rpm ~= nil then row.max_rpm = changes.max_rpm end

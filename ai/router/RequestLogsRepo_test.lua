@@ -17,7 +17,7 @@ end
 ---@param status integer?
 ---@return ai.router.RequestLogRow
 local function row(now, status)
-	return {created_at = now, user = "alice", model = "fast", channel = "zai", upstream_model = "glm",
+	return {user_id = 1, created_at = now, user = "alice", model = "fast", channel = "zai", upstream_model = "glm",
 		protocol = "chat_completions", stream = true, status = status or 200, duration_ms = 1250,
 		input_tokens = 10, output_tokens = 5, cached_input_tokens = 3, estimated = false}
 end
@@ -146,6 +146,22 @@ function test.filter_options_are_retained_distinct_sorted_and_bounded(t)
 	options = repo:filterOptions(1011)
 	t:tdeq(options, {user = {}, model = {}, channel = {}})
 	t:eq(#storage.db:query("SELECT * FROM router_request_logs"), 103)
+	storage:close()
+end
+
+---@param t testing.T
+function test.owner_scope_applies_to_rows_and_filter_suggestions(t)
+	local repo, storage = open()
+	local own, foreign = row(1000), row(1001)
+	foreign.user_id, foreign.model, foreign.channel = 2, "PRIVATE-MODEL", "PRIVATE-CHANNEL"
+	-- Same display name must never confer ownership.
+	repo:record(own)
+	repo:record(foreign)
+	t:eq(#repo:list({user_id = 1}, 1001), 1)
+	t:eq(#repo:list({user_id = 1, model = "PRIVATE-MODEL"}, 1001), 0)
+	t:tdeq(repo:filterOptions(1001, 1), {user = {"alice"}, model = {"fast"}, channel = {"zai"}})
+	t:eq(#repo:list({}, 1001), 2)
+	t:has_error(function() repo:list({user_id = "1 OR 1=1"}, 1001) end)
 	storage:close()
 end
 

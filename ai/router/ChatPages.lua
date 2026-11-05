@@ -10,7 +10,7 @@ local RequestMetrics = require("ai.router.RequestMetrics")
 -- Assets live next to this module; resolve them from the module path, not the checkout layout.
 local chat_dir = debug.getinfo(1, "S").source:match("^@?(.+)/[^/]+$") .. "/chat"
 
--- Web chat for named users: the user's API key is exchanged once for an
+-- Shared web authentication: a user's API key is exchanged once for an
 -- HMAC-signed session cookie, and POST /chat/completions runs the same
 -- shared inference path as /v1/chat/completions (limits, grants,
 -- accounting, request log).
@@ -32,26 +32,28 @@ ChatPages.cookie_max_age = 10 * 365 * 24 * 3600
 ---@class ai.router.ChatPagesOptions
 ---@field users_repo ai.router.UsersRepo
 ---@field server ai.router.Server
----@field password string
+---@field session_secret string
 ---@field get_time (fun(): number)?
 
 ---@param options ai.router.ChatPagesOptions
 function ChatPages:new(options)
-	assert(type(options.password) == "string" and #options.password >= 16,
-		"admin password must contain at least 16 characters")
+	assert(type(options.session_secret) == "string" and #options.session_secret >= 16,
+		"session secret must contain at least 16 characters")
 	self.users_repo = options.users_repo
 	self.server = options.server
 	self.get_time = options.get_time or os.time
-	-- Domain-separated derivation keeps the chat HMAC independent of the
-	-- admin session while needing no extra configuration.
+	-- Keep the domain and cookie stable so existing API-key sessions continue
+	-- to work. This secret signs web sessions; it no longer logs anyone in.
 	self.sessions = Sessions(ChatPages.cookie_name,
-		digest.hash("sha256", options.password .. "\0ai-router-chat", true))
+		digest.hash("sha256", options.session_secret .. "\0ai-router-chat", true))
 	self.stylesheet = io_util.read_file(chat_dir .. "/chat.css")
 	self.theme_script = io_util.read_file(chat_dir .. "/theme.js")
 	self.chat_script = io_util.read_file(chat_dir .. "/chat.js")
 	self.templates = {}
 	self.templates.login = etlua.compile(io_util.read_file(chat_dir .. "/login.etlua"), "@chat/login")
 	self.templates.chat = etlua.compile(io_util.read_file(chat_dir .. "/chat.etlua"), "@chat/chat")
+	self.templates.layout = etlua.compile(io_util.read_file(chat_dir .. "/../admin/layout.etlua"), "@layout")
+	self.dashboard_stylesheet = io_util.read_file(chat_dir .. "/../admin/dashboard.css")
 end
 
 ---@param res web.Response
@@ -148,7 +150,7 @@ function ChatPages:login(req, res)
 	if user and not user.disabled then
 		self.sessions:set(res.headers, {user_id = user.id, key_fingerprint = self:keyFingerprint(user)},
 			ChatPages.cookie_max_age)
-		redirect(res, "/chat")
+		redirect(res, "/")
 	else
 		-- One generic message: never reveal which check failed.
 		send(res, 401, self.templates.login({error_message = "Invalid API key.",
@@ -165,7 +167,7 @@ function ChatPages:logout(req, res)
 		send(res, 403, "Invalid CSRF token.")
 	else
 		self:clearSession(res)
-		redirect(res, "/chat")
+		redirect(res, "/login")
 	end
 end
 
@@ -200,14 +202,13 @@ function ChatPages:renderChat(res, session, user)
 	local config = json.encode({csrfToken = session.csrf_token, userId = user.id, model = models[1] or ""})
 	-- Keep the inline JSON from closing the script element; "\/" is still valid JSON.
 	config = config:gsub("</", "<\\/")
-	send(res, 200, self.templates.chat({
-		username = user.name,
-		models = models,
-		config = config,
+	send(res, 200, self.templates.layout({
+		title = "Chat", user = user,
+		content = self.templates.chat({models = models}),
 		csrf_token = session.csrf_token,
-		stylesheet = self.stylesheet,
+		stylesheet = self.dashboard_stylesheet .. "\n" .. self.stylesheet,
 		theme_script = self.theme_script,
-		page_script = self.chat_script,
+		page_script = "window.routerChat = " .. config .. ";\n" .. self.chat_script,
 	}))
 end
 
@@ -217,7 +218,7 @@ end
 ---@return boolean
 function ChatPages:handle(req, res, ip)
 	local path = req.uri:match("^[^?]+") or req.uri
-	if path ~= "/chat" and not path:match("^/chat/") then return false end
+	if path ~= "/login" and path ~= "/logout" and path ~= "/chat" and not path:match("^/chat/") then return false end
 	if path == "/chat" then
 		if req.method ~= "GET" then
 			res.headers:set("Allow", "GET")
@@ -225,32 +226,29 @@ function ChatPages:handle(req, res, ip)
 			return true
 		end
 		local session, user = self:session(req)
-		if not session then
-			-- A decodable session means the user was disabled, deleted, or the
-			-- key was rotated since sign-in; say so and clear the cookie.
-			if self.sessions:get(req.headers) then
-				self:clearSession(res)
-				send(res, 200, self.templates.login({
-					error_message = "Your session is no longer valid. Sign in with your API key.",
-					stylesheet = self.stylesheet, theme_script = self.theme_script}))
+		if not session then redirect(res, "/login")
+		else self:renderChat(res, session, user) end
+		return true
+	end
+	if path == "/login" then
+		if req.method == "POST" then self:login(req, res)
+		elseif req.method == "GET" then
+			local session = self:session(req)
+			if session then redirect(res, "/")
 			else
-				send(res, 200, self.templates.login({stylesheet = self.stylesheet, theme_script = self.theme_script}))
+				local revoked = self.sessions:get(req.headers)
+				if revoked then self:clearSession(res) end
+				send(res, 200, self.templates.login({
+					error_message = revoked and "Your session is no longer valid. Sign in with your API key." or nil,
+					stylesheet = self.stylesheet, theme_script = self.theme_script}))
 			end
 		else
-			self:renderChat(res, session, user)
+			res.headers:set("Allow", "GET, POST")
+			send(res, 405, "Sign-in accepts GET and POST only.")
 		end
 		return true
 	end
-	if path == "/chat/login" then
-		if req.method ~= "POST" then
-			res.headers:set("Allow", "POST")
-			send(res, 405, "Sign-in accepts form posts only.")
-			return true
-		end
-		self:login(req, res)
-		return true
-	end
-	if path == "/chat/logout" then
+	if path == "/logout" then
 		if req.method ~= "POST" then
 			res.headers:set("Allow", "POST")
 			send(res, 405, "Sign-out accepts form posts only.")

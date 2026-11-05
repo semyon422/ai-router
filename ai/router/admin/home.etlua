@@ -1,0 +1,19 @@
+<div class="channel-grid">
+<section class="channel-card">
+<h2>Chat</h2>
+<p class="muted">Talk to your available models. Conversations stay in this browser.</p>
+<a href="/chat">Open chat →</a>
+</section>
+<section class="channel-card">
+<h2>Requests</h2>
+<p class="muted"><%= user.role == "admin" and "Review request metadata across all users." or "Review your request history and token usage." %></p>
+<a href="/requests">View requests →</a>
+</section>
+<% if user.role == "admin" then %>
+<section class="channel-card">
+<h2>Overview</h2>
+<p class="muted">See channel quotas, monitoring status, and the router summary.</p>
+<a href="/overview">Open overview →</a>
+</section>
+<% end %>
+</div>

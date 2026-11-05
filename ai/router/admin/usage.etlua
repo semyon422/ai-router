@@ -1,8 +1,8 @@
 <div class="section-heading usage-heading">
 <div><h2>Usage — last <%= hours %> hours</h2><p class="muted">Hourly buckets · UTC · current hour is partial. Snapshot <%= generated_label %>.</p></div>
 <nav class="period-control" aria-label="Usage period">
-<a href="/admin/usage?hours=24"<% if hours == 24 then %> aria-current="page"<% end %>>24h</a>
-<a href="/admin/usage?hours=168"<% if hours == 168 then %> aria-current="page"<% end %>>7d</a>
+<a href="/usage?hours=24"<% if hours == 24 then %> aria-current="page"<% end %>>24h</a>
+<a href="/usage?hours=168"<% if hours == 168 then %> aria-current="page"<% end %>>7d</a>
 </nav>
 </div>
 <dl class="metrics usage-metrics" aria-label="Usage totals">

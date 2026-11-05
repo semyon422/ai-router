@@ -56,7 +56,7 @@
 		tick();
 		const timeout = setTimeout(() => controller.abort(), 10000);
 		try {
-			const response = await fetch("/admin/overview/data", {
+			const response = await fetch("/overview/data", {
 				credentials: "same-origin", cache: "no-store", redirect: "error",
 				headers: {Accept: "application/json"}, signal: controller.signal,
 			});

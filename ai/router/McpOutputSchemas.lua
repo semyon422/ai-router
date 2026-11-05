@@ -34,9 +34,9 @@ local operation = object({
 	persistence = enum({"committed", "not_committed", "not_attempted", "unknown"}),
 	reload = enum({"applied", "failed", "not_required", "not_attempted"}),
 }, {"persistence", "reload"})
-local user = object({id = integer, name = text, key_hint = text, disabled = flag,
+local user = object({id = integer, name = text, role = enum({"user", "admin"}), key_hint = text, disabled = flag,
 	max_concurrency = integer, max_rpm = integer, created_at = integer, updated_at = integer, models = strings},
-	{"id", "name", "key_hint", "disabled", "created_at", "updated_at", "models"})
+	{"id", "name", "role", "key_hint", "disabled", "created_at", "updated_at", "models"})
 local config = object({models = strings, model_redirects = {type = "object", additionalProperties = text},
 	base_url = text, usage_url = text,
 	reasoning_effort = enum({"none", "low", "medium", "high"}), verbosity = enum({"low", "medium", "high"}),

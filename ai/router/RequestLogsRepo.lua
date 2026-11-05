@@ -2,6 +2,7 @@ local class = require("class")
 
 ---@class ai.router.RequestLogRow
 ---@field id integer?
+---@field user_id integer
 ---@field created_at integer
 ---@field user string
 ---@field model string
@@ -22,6 +23,7 @@ local class = require("class")
 
 ---@class ai.router.RequestLogFilters
 ---@field before integer?
+---@field user_id integer? Trusted authorization scope, never read from a browser query.
 ---@field user string?
 ---@field model string?
 ---@field channel string?
@@ -59,6 +61,11 @@ function RequestLogsRepo:list(filters, now)
 	local clauses = {"created_at >= ?"}
 	---@type (string|number)[]
 	local values = {now - self.retention_seconds}
+	if filters.user_id ~= nil then
+		assert(type(filters.user_id) == "number" and filters.user_id >= 1 and filters.user_id % 1 == 0, "invalid history owner")
+		table.insert(clauses, "user_id = ?")
+		table.insert(values, filters.user_id)
+	end
 	for _, key in ipairs({"user", "model", "channel"}) do
 		---@type string?
 		local value = filters[key]
@@ -77,7 +84,7 @@ function RequestLogsRepo:list(filters, now)
 	local rows = self.models.router_request_logs.orm:query("SELECT * FROM router_request_logs WHERE "
 		.. table.concat(clauses, " AND ") .. " ORDER BY id DESC LIMIT ?", values)
 	for _, row in ipairs(rows) do
-		for _, key in ipairs({"id", "created_at", "status", "duration_ms", "input_tokens", "output_tokens", "cached_input_tokens"}) do
+		for _, key in ipairs({"id", "user_id", "created_at", "status", "duration_ms", "input_tokens", "output_tokens", "cached_input_tokens"}) do
 			row[key] = assert(tonumber(row[key]))
 		end
 		row.stream = row.stream == 1
@@ -104,14 +111,22 @@ end
 ---@field channel string[]
 
 ---@param now integer
+---@param user_id integer? Trusted authorization scope for suggestions as well as rows.
 ---@return ai.router.RequestLogFilterOptions
-function RequestLogsRepo:filterOptions(now)
+function RequestLogsRepo:filterOptions(now, user_id)
 	---@type ai.router.RequestLogFilterOptions
 	local options = {user = {}, model = {}, channel = {}}
+	local owner_clause = ""
+	local values = {now - self.retention_seconds}
+	if user_id ~= nil then
+		assert(type(user_id) == "number" and user_id >= 1 and user_id % 1 == 0, "invalid history owner")
+		owner_clause = " AND user_id = ?"
+		table.insert(values, user_id)
+	end
 	for _, key in ipairs({"user", "model", "channel"}) do
 		local rows = self.models.router_request_logs.orm:query("SELECT DISTINCT " .. key
-			.. " AS value FROM router_request_logs WHERE created_at >= ? AND " .. key .. " <> '' ORDER BY " .. key .. " LIMIT 100",
-			{now - self.retention_seconds})
+			.. " AS value FROM router_request_logs WHERE created_at >= ?" .. owner_clause .. " AND " .. key .. " <> '' ORDER BY " .. key .. " LIMIT 100",
+			values)
 		---@type string[]
 		local values = options[key]
 		for _, row in ipairs(rows) do table.insert(values, row.value) end

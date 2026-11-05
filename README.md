@@ -2,7 +2,23 @@
 
 Standalone multi-channel AI inference router: named users with API keys and per-user
 model grants, ChatGPT/Codex OAuth channels, GLM and OpenAI-compatible upstreams,
-usage statistics, an MCP management API and a read-only web admin dashboard.
+usage statistics, an MCP management API and a shared API-key web workspace.
+
+## Web workspace
+
+Sign in at `/login` with your router API key. `/` is the shared Home page;
+`/chat` is the chat. Users get chat and their own request
+metadata; admins also get the full dashboard and everyone's requests. Roles are
+managed through MCP (`router_create_user` / `router_update_user`, `role: user|admin`).
+Roles do not bypass inference model grants. Conversation text stays in your browser.
+The MCP management token remains separate.
+
+Dashboard URLs have no `/admin` prefix: `/overview`, `/channels`, `/usage`,
+`/requests`, `/models`, `/users`. Logout is `POST /logout` with CSRF protection.
+Old URLs are removed, with no compatibility redirects.
+
+`session_secret` signs web cookies; existing `admin_password` configs remain supported
+as a signing-secret alias, but password login is removed.
 
 The full specification is in [ai/router/spec.md](ai/router/spec.md).
 
@@ -33,6 +49,10 @@ Deploys to `/home/semyon422/ai-router` on the VPS, one `ai-router` compose servi
 (listening on `127.0.0.1:28083`), state in `server-state/` (`config.lua`, `network.lua`,
 `router.db`):
 
+- **Schema 8 → 9:** back up SQLite consistently before upgrading. Startup migrates
+  transactionally, deleting only old unowned request logs; users, grants, aggregates
+  and credentials are preserved. All accounts initially have role `user`: assign
+  the intended administrator with `router_update_user({id, role="admin"})` using MCP.
 - `make config` — create the private config with random secrets (one time).
 - Push to `master` (or dispatch the workflow) — GitHub Actions runs
   `./deploy.sh <commit>` over SSH: checkout, `./test`, compose recreate, health wait.
