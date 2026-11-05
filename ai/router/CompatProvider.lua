@@ -1,5 +1,5 @@
 local class = require("class")
-local ZaiClient = require("ai.zai.Client")
+local ChatCompletionsClient = require("ai.openai.ChatCompletionsClient")
 local Provider = require("ai.router.Provider")
 local ChatProtocol = require("ai.openai.ChatCompletionsProtocol")
 
@@ -9,13 +9,13 @@ local ChatProtocol = require("ai.openai.ChatCompletionsProtocol")
 -- deltas are relayed unchanged.
 ---@class ai.router.CompatProvider
 ---@operator call: ai.router.CompatProvider
----@field create_client fun(): zai.Client
+---@field create_client fun(): openai.ChatCompletionsClient
 local CompatProvider = class()
 
 ---@class ai.router.CompatProviderOptions
 ---@field config {[string]: any} channel config: base_url, api_key?, models
----@field request zai.RequestFunc
----@field open_stream zai.OpenStreamFunc
+---@field request openai.RequestFunc
+---@field open_stream openai.OpenStreamFunc
 ---@field timeout number?
 
 ---@param options ai.router.CompatProviderOptions
@@ -23,18 +23,12 @@ function CompatProvider:new(options)
 	local config = options.config
 	assert(type(config.base_url) == "string" and config.base_url ~= "", "compat base_url is required")
 	assert(type(config.models) == "table" and #config.models > 0, "compat models are required")
-	-- Endpoints without authentication ignore the bearer header; a placeholder
-	-- keeps the shared client's non-empty key invariant.
-	local api_key = config.api_key
-	if api_key == nil or api_key == "" then
-		api_key = "local-compat-endpoint"
-	end
 	local request = options.request
 	local open_stream = options.open_stream
 	self.create_client = function()
-		return ZaiClient({
+		return ChatCompletionsClient({
 			base_url = config.base_url,
-			api_key = api_key,
+			api_key = config.api_key,
 			timeout = options.timeout,
 			request = request,
 			open_stream = open_stream,
@@ -61,7 +55,7 @@ end
 ---@param upstream_model string
 ---@return openai.CanonicalMessage? message
 ---@return string? err
----@return zai.ProviderError? provider_error
+---@return openai.ChatCompletionsError? provider_error
 function CompatProvider:complete(body, upstream_model)
 	local completion, err, provider_error = self.create_client():complete(CompatProvider.upstreamBody(body, upstream_model))
 	if not completion then
@@ -85,7 +79,7 @@ end
 ---@param on_delta fun(delta: table): boolean?
 ---@return openai.CanonicalMessage? message
 ---@return string? err
----@return zai.ProviderError? provider_error
+---@return openai.ChatCompletionsError? provider_error
 function CompatProvider:completeStream(body, upstream_model, on_delta)
 	local message, err, provider_error = self.create_client():completeStream(
 		Provider.streamingBody(CompatProvider.upstreamBody(body, upstream_model)), on_delta)

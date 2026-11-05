@@ -223,7 +223,8 @@ end
 function test.compat_provider_forwards_body_verbatim(t)
 	---@type any
 	local captured
-	local request = function(_, body, _options)
+	local request = function(_, body, options)
+		t:eq(options.headers.Authorization, nil)
 		captured = json.decode(body)
 		return {status = 200, body = json.encode({
 			id = "1",
