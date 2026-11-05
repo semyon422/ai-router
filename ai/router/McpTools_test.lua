@@ -7,7 +7,7 @@ local http_util = require("web.http.util")
 local Stack = require("ai.router.testing.Stack")
 local OpenAILoginManager = require("ai.router.OpenAILoginManager")
 local SubscriptionAuth = require("ai.openai.SubscriptionAuth")
-local ZaiProxyServer = require("ai.zai.ProxyServer")
+local ZaiProtocol = require("ai.zai.Protocol")
 
 local test = {}
 
@@ -377,7 +377,7 @@ function test.channel_probe_uses_one_native_call_and_only_returns_metadata(t)
 			t:eq(result.probe.cached_input_tokens, 1)
 			if kind == "zai" then
 				-- the probe body must pass the real zai validation, which only accepts JSON-tagged tables
-				local upstream_body = ZaiProxyServer.normalizeRequest(last_probe_body,
+				local upstream_body = ZaiProtocol.normalizeRequest(last_probe_body,
 					{public = true, redirected = true}, {public = "redirected"}, nil, true)
 				t:assert(upstream_body, "probe body must pass zai request validation")
 			end

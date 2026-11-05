@@ -2,7 +2,7 @@ local class = require("class")
 local json = require("web.json")
 local OAuthRepo = require("ai.router.OAuthRepo")
 local Catalog = require("ai.router.Catalog")
-local Provider = require("ai.router.Provider")
+local ChatProtocol = require("ai.openai.ChatCompletionsProtocol")
 local RequestMetrics = require("ai.router.RequestMetrics")
 
 ---@class ai.router.ManagementOptions
@@ -461,10 +461,10 @@ function Management:testChannel(args)
 		status = 502
 		metrics:providerError(nil, type(value.error) == "table" and value.error or nil)
 	end
-	---@type ai.router.CanonicalUsage?
+	---@type openai.CanonicalUsage?
 	local usage
 	if type(value) == "table" then
-		if native then usage = Provider.canonicalUsage(value.usage)
+		if native then usage = ChatProtocol.canonicalUsage(value.usage)
 		else usage = value.usage end
 	end
 	return {probe = {id = row.id, channel = row.name, model = public_model,

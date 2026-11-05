@@ -1,6 +1,7 @@
 local class = require("class")
 local ZaiClient = require("ai.zai.Client")
 local Provider = require("ai.router.Provider")
+local ChatProtocol = require("ai.openai.ChatCompletionsProtocol")
 
 -- Upstream adapter for a trusted local OpenAI-compatible endpoint such as
 -- llama.cpp. No field allowlist is applied: the validated client body is
@@ -58,7 +59,7 @@ end
 
 ---@param body table
 ---@param upstream_model string
----@return ai.router.CanonicalMessage? message
+---@return openai.CanonicalMessage? message
 ---@return string? err
 ---@return zai.ProviderError? provider_error
 function CompatProvider:complete(body, upstream_model)
@@ -67,14 +68,14 @@ function CompatProvider:complete(body, upstream_model)
 		return nil, err, provider_error
 	end
 	---@cast completion {[string]: any}
-	local choice = Provider.completionChoice(completion)
-	---@type ai.router.CanonicalMessage
-	local canonical = Provider.canonicalMessage(choice.message)
+	local choice = completion.choices[1]
+	---@type openai.CanonicalMessage
+	local canonical = ChatProtocol.canonicalMessage(choice.message)
 	if type(choice.finish_reason) == "string" then
 		canonical.finish_reason = choice.finish_reason
 	end
 	if not canonical.usage then
-		canonical.usage = Provider.canonicalUsage(completion.usage)
+		canonical.usage = ChatProtocol.canonicalUsage(completion.usage)
 	end
 	return canonical
 end
@@ -82,7 +83,7 @@ end
 ---@param body table
 ---@param upstream_model string
 ---@param on_delta fun(delta: table): boolean?
----@return ai.router.CanonicalMessage? message
+---@return openai.CanonicalMessage? message
 ---@return string? err
 ---@return zai.ProviderError? provider_error
 function CompatProvider:completeStream(body, upstream_model, on_delta)
@@ -91,7 +92,7 @@ function CompatProvider:completeStream(body, upstream_model, on_delta)
 	if not message then
 		return nil, err, provider_error
 	end
-	return Provider.canonicalMessage(message)
+	return ChatProtocol.canonicalMessage(message)
 end
 
 return CompatProvider

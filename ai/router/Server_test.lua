@@ -24,8 +24,8 @@ local test = {}
 local TOKEN = "router-secret-router-secret-router"
 
 ---@class test.FakeProvider
----@field complete (fun(self: test.FakeProvider, body: table, upstream_model: string): ai.router.CanonicalMessage?, string?, table?)?
----@field completeStream (fun(self: test.FakeProvider, body: table, upstream_model: string, on_delta: fun(delta: table): boolean?): ai.router.CanonicalMessage?, string?, table?)?
+---@field complete (fun(self: test.FakeProvider, body: table, upstream_model: string): openai.CanonicalMessage?, string?, table?)?
+---@field completeStream (fun(self: test.FakeProvider, body: table, upstream_model: string, on_delta: fun(delta: table): boolean?): openai.CanonicalMessage?, string?, table?)?
 ---@field fetchUsage (fun(self: test.FakeProvider): table?, string?, table?)?
 ---@field complete_count integer
 ---@field stream_count integer

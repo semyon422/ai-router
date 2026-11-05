@@ -1,8 +1,9 @@
 local class = require("class")
 local json = require("web.json")
 local ZaiClient = require("ai.zai.Client")
-local ZaiProxyServer = require("ai.zai.ProxyServer")
+local ZaiProtocol = require("ai.zai.Protocol")
 local Provider = require("ai.router.Provider")
+local ChatProtocol = require("ai.openai.ChatCompletionsProtocol")
 
 -- Upstream adapter for a GLM Coding Plan channel. Reuses the standalone
 -- proxy's field allowlist and model resolution so router traffic follows the
@@ -74,13 +75,13 @@ end
 ---@return string? message
 ---@return string? code
 function ZaiProvider:normalize(body)
-	return ZaiProxyServer.normalizeRequest(body, self.models_set, self.model_redirects,
+	return ZaiProtocol.normalizeRequest(body, self.models_set, self.model_redirects,
 		self.thinking, self.tool_stream)
 end
 
 ---@param body table
 ---@param _upstream_model string unused: normalize computes the redirected model
----@return ai.router.CanonicalMessage? message
+---@return openai.CanonicalMessage? message
 ---@return string? err
 ---@return zai.ProviderError? provider_error
 function ZaiProvider:complete(body, _upstream_model)
@@ -93,14 +94,14 @@ function ZaiProvider:complete(body, _upstream_model)
 		return nil, err, provider_error
 	end
 	---@cast completion {[string]: any}
-	local choice = Provider.completionChoice(completion)
-	---@type ai.router.CanonicalMessage
-	local canonical = Provider.canonicalMessage(choice.message)
+	local choice = completion.choices[1]
+	---@type openai.CanonicalMessage
+	local canonical = ChatProtocol.canonicalMessage(choice.message)
 	if type(choice.finish_reason) == "string" then
 		canonical.finish_reason = choice.finish_reason
 	end
 	if not canonical.usage then
-		canonical.usage = Provider.canonicalUsage(completion.usage)
+		canonical.usage = ChatProtocol.canonicalUsage(completion.usage)
 	end
 	return canonical
 end
@@ -110,7 +111,7 @@ end
 ---@param body table
 ---@param _upstream_model string unused: normalize computes the redirected model
 ---@param on_delta fun(delta: table): boolean?
----@return ai.router.CanonicalMessage? message
+---@return openai.CanonicalMessage? message
 ---@return string? err
 ---@return zai.ProviderError? provider_error
 function ZaiProvider:completeStream(body, _upstream_model, on_delta)
@@ -122,7 +123,7 @@ function ZaiProvider:completeStream(body, _upstream_model, on_delta)
 	if not message_result then
 		return nil, err, provider_error
 	end
-	return Provider.canonicalMessage(message_result)
+	return ChatProtocol.canonicalMessage(message_result)
 end
 
 -- Fetches the z.ai monitor endpoint with the same Coding Plan API key as

@@ -79,30 +79,6 @@ function RequestMetrics:outcomeCode(status)
 	return self.error_code or (status == 500 and "internal_error" or status == 429 and "rate_limit" or "upstream_error")
 end
 
----@param delta {[string]: any}
----@return boolean
-function RequestMetrics.chatOutput(delta)
-	for _, key in ipairs({"content", "reasoning_content", "reasoning", "refusal"}) do
-		local value = delta[key]
-		if type(value) == "string" and value ~= "" then return true end
-	end
-	if type(delta.tool_calls) == "table" then
-		for _, call in ipairs(delta.tool_calls) do
-			if type(call) == "table" and type(call["function"]) == "table" then
-				local f = call["function"]
-				if type(f.name) == "string" and f.name ~= ""
-					or type(f.arguments) == "string" and f.arguments ~= "" then return true end
-			end
-		end
-	end
-	local f = delta.function_call
-	if type(f) == "table" and (type(f.name) == "string" and f.name ~= ""
-		or type(f.arguments) == "string" and f.arguments ~= "") then return true end
-	local audio = delta.audio
-	if type(audio) == "table" and type(audio.data) == "string" and audio.data ~= "" then return true end
-	return false
-end
-
 ---@param event {[string]: any}
 ---@return boolean
 function RequestMetrics.responseOutput(event)

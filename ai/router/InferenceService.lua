@@ -1,12 +1,11 @@
 local class = require("class")
-local digest = require("digest")
 local json = require("web.json")
 local random = require("web.random")
 ---@type {gettime: fun(): number}
 local socket = require("socket")
 local Catalog = require("ai.router.Catalog")
 local Router = require("ai.router.Router")
-local Provider = require("ai.router.Provider")
+local ChatProtocol = require("ai.openai.ChatCompletionsProtocol")
 local ResponsesProtocol = require("ai.openai.ResponsesProtocol")
 local RequestLogsRepo = require("ai.router.RequestLogsRepo")
 local RequestMetrics = require("ai.router.RequestMetrics")
@@ -46,8 +45,8 @@ InferenceService.max_requests_per_minute = 120
 -- The provider methods inference and explicit channel probes call; implemented
 -- by OpenAIProvider, ZaiProvider, and CompatProvider.
 ---@class ai.router.ProviderMethods
----@field complete (fun(self: ai.router.ProviderMethods, body: table, upstream_model: string): ai.router.CanonicalMessage?, string?, table?)?
----@field completeStream (fun(self: ai.router.ProviderMethods, body: table, upstream_model: string, on_delta: fun(delta: table): boolean?): ai.router.CanonicalMessage?, string?, table?)?
+---@field complete (fun(self: ai.router.ProviderMethods, body: table, upstream_model: string): openai.CanonicalMessage?, string?, table?)?
+---@field completeStream (fun(self: ai.router.ProviderMethods, body: table, upstream_model: string, on_delta: fun(delta: table): boolean?): openai.CanonicalMessage?, string?, table?)?
 ---@field createResponse (fun(self: ai.router.ProviderMethods, body: table, upstream_model: string, session_id: string?, on_event: (fun(event: table): boolean?)?): table?, string?, table?)?
 ---@field fetchUsage (fun(self: ai.router.ProviderMethods): table?, string?, ai.router.UsageFetchError?)?
 
@@ -115,64 +114,6 @@ function InferenceService:reload(channel_rows, model_rows)
 	self.providers = providers
 end
 
----@param completion_id string
----@param created integer
----@param public_model string
----@param delta table
----@param finish_reason string?
----@param include_usage boolean
----@return table
-local function chunkEvent(completion_id, created, public_model, delta, finish_reason, include_usage)
-	return {
-		id = completion_id,
-		object = "chat.completion.chunk",
-		created = created,
-		model = public_model,
-		choices = {{index = 0, delta = delta, finish_reason = finish_reason}},
-		usage = include_usage and json.null or nil,
-	}
-end
-
----@param completion_id string
----@param created integer
----@param public_model string
----@param usage table
----@return table
-local function usageChunkEvent(completion_id, created, public_model, usage)
-	return {
-		id = completion_id,
-		object = "chat.completion.chunk",
-		created = created,
-		model = public_model,
-		choices = json.array({}),
-		usage = usage,
-	}
-end
-
----@param usage ai.router.CanonicalUsage?
----@return table?
-local function ccUsage(usage)
-	if not usage then return nil end
-	---@type table
-	local result = {
-		prompt_tokens = usage.input_tokens,
-		completion_tokens = usage.output_tokens,
-		total_tokens = usage.input_tokens + usage.output_tokens,
-	}
-	if usage.cached_input_tokens > 0 then
-		result.prompt_tokens_details = {cached_tokens = usage.cached_input_tokens}
-	end
-	return result
-end
-
----@param message ai.router.CanonicalMessage
----@return string
-local function finishReason(message)
-	if message.finish_reason then return message.finish_reason end
-	if message.tool_calls and message.tool_calls[1] then return "tool_calls" end
-	return "stop"
-end
-
 -- Estimates token counts when the provider did not report usage.
 ---@param value any
 ---@return integer
@@ -215,7 +156,7 @@ end
 
 -- One request to the explicitly selected channel. Never retries.
 ---@class ai.router.AttemptResult
----@field message ai.router.CanonicalMessage?
+---@field message openai.CanonicalMessage?
 ---@field response table? Native Responses result; never converted to a canonical assistant message.
 ---@field provider_error table?
 ---@field refresh_usage boolean?
@@ -265,19 +206,7 @@ local function attempt(self, res, request, public_model, candidate, completion_i
 				refresh_usage = status == 429 or provider_error and provider_error.type == "rate_limit_error",
 			}
 		end
-		local completion = {
-			id = completion_id,
-			object = "chat.completion",
-			created = created,
-			model = public_model,
-			choices = {{
-				index = 0,
-				message = message,
-				finish_reason = finishReason(message),
-			}},
-		}
-		local usage = ccUsage(message.usage)
-		if usage then completion.usage = usage end
+		local completion = ChatProtocol.completion(completion_id, created, public_model, message)
 		local sent = sendJson(res, completion)
 		return {message = message, downstream_closed = not sent, status_code = sent and 200 or 499}
 	end
@@ -288,7 +217,7 @@ local function attempt(self, res, request, public_model, candidate, completion_i
 	local function commit()
 		if committed then return true end
 		if not startEventStream(res)
-			or not sendEvent(res, chunkEvent(completion_id, created, public_model,
+			or not sendEvent(res, ChatProtocol.chunk(completion_id, created, public_model,
 				{role = "assistant"}, nil, include_usage))
 		then
 			return false
@@ -298,7 +227,7 @@ local function attempt(self, res, request, public_model, candidate, completion_i
 	end
 	local ok, message, err, provider_error = pcall(provider.completeStream, provider, body, upstream_model, function(delta)
 		if downstream_closed then return false end
-		if RequestMetrics.chatOutput(delta) then metrics:markOutput() end
+		if ChatProtocol.hasOutput(delta) then metrics:markOutput() end
 		-- Role announcements and empty deltas are not assistant output.
 		if not committed then
 			local has_output = false
@@ -312,7 +241,7 @@ local function attempt(self, res, request, public_model, candidate, completion_i
 			downstream_closed = true
 			return false
 		end
-		local sent = sendEvent(res, chunkEvent(completion_id, created, public_model, delta, nil, include_usage))
+		local sent = sendEvent(res, ChatProtocol.chunk(completion_id, created, public_model, delta, nil, include_usage))
 		if not sent then
 			downstream_closed = true
 			return false
@@ -354,11 +283,11 @@ local function attempt(self, res, request, public_model, candidate, completion_i
 	if downstream_closed or not commit() then
 		return {status_code = 499, message = message, downstream_closed = true}
 	end
-	local sent = sendEvent(res, chunkEvent(completion_id, created, public_model, json.object(), finishReason(message), include_usage))
+	local sent = sendEvent(res, ChatProtocol.chunk(completion_id, created, public_model, json.object(), ChatProtocol.finishReason(message), include_usage))
 	if sent and include_usage then
-		local usage = ccUsage(message.usage)
+		local usage = ChatProtocol.completionUsage(message.usage)
 		if usage then
-			sent = sendEvent(res, usageChunkEvent(completion_id, created, public_model, usage))
+			sent = sendEvent(res, ChatProtocol.usageChunk(completion_id, created, public_model, usage))
 		end
 	end
 	if sent then sent = sendEvent(res, "[DONE]") end
@@ -520,7 +449,7 @@ end
 local function requestCounters(request, result)
 	local message = result and result.message
 	local response = result and result.response
-	local usage = response and Provider.canonicalUsage(response.usage) or message and message.usage
+	local usage = response and ChatProtocol.canonicalUsage(response.usage) or message and message.usage
 	local input_tokens = usage and usage.input_tokens or 0
 	local output_tokens = usage and usage.output_tokens or 0
 	local cached = usage and usage.cached_input_tokens or 0

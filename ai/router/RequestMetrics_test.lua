@@ -23,15 +23,7 @@ function test.output_timing_is_optional_and_first_output_is_stable(t)
 end
 
 ---@param t testing.T
-function test.only_output_events_start_ttft(t)
-	for _, delta in ipairs({{}, {role = "assistant"}, {content = ""}, {content = false}, {tool_calls = {}},
-		{tool_calls = {{index = 0, id = "call_1", type = "function"}}}}) do
-		t:eq(RequestMetrics.chatOutput(delta), false)
-	end
-	for _, delta in ipairs({{content = "hi"}, {reasoning_content = "thinking"},
-		{tool_calls = {{index = 0, ["function"] = {arguments = "{}"}}}}}) do
-		t:eq(RequestMetrics.chatOutput(delta), true)
-	end
+function test.only_response_output_events_start_ttft(t)
 	for _, name in ipairs({"response.created", "response.in_progress", "response.completed", "response.output_item.added"}) do
 		t:eq(RequestMetrics.responseOutput({type = name, delta = "not-output"}), false)
 	end

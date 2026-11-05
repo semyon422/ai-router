@@ -311,17 +311,15 @@ function test.openai_provider_preserves_native_responses_and_affinity(t)
 end
 
 ---@param t testing.T
-function test.provider_canonical_usage_dialects(t)
-	t:eq(Provider.canonicalUsage(nil), nil)
-	t:eq(Provider.canonicalUsage(json.object()), nil)
-	t:tdeq(Provider.canonicalUsage({
-		input_tokens = 5, output_tokens = 6, total_tokens = 11,
-		input_tokens_details = {cached_tokens = 2},
-	}), {input_tokens = 5, output_tokens = 6, cached_input_tokens = 2})
-	t:tdeq(Provider.canonicalUsage({
-		prompt_tokens = 5, completion_tokens = 6, total_tokens = 11,
-		prompt_tokens_details = {cached_tokens = 1},
-	}), {input_tokens = 5, output_tokens = 6, cached_input_tokens = 1})
+function test.provider_streaming_policy_preserves_other_options_and_client_body(t)
+	local body = json.decode('{"model":"m","stream":true,"stream_options":{"include_usage":false,"include_obfuscation":false}}')
+	local before = json.encode(body)
+	local upstream = Provider.streamingBody(body)
+	t:eq(upstream.stream_options.include_usage, true)
+	t:eq(upstream.stream_options.include_obfuscation, false)
+	t:eq(json.encode(body), before)
+	t:eq(upstream == body, false)
+	t:eq(upstream.stream_options == body.stream_options, false)
 end
 
 ---@param t testing.T
