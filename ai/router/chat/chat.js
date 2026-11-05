@@ -1,230 +1,300 @@
 (() => {
 	const config = window.routerChat;
-	const model = document.getElementById("chat-model");
-	const messages = document.getElementById("chat-messages");
-	const input = document.getElementById("chat-input");
-	const send = document.getElementById("chat-send");
-	const errorLine = document.getElementById("chat-error");
-	if (!config || !model || !messages || !input || !send || !errorLine) return;
-
+	const get = id => document.getElementById(id);
+	const model = get("chat-model"), messages = get("chat-messages"), input = get("chat-input");
+	const send = get("chat-send"), errorLine = get("chat-error"), reset = get("chat-reset");
+	const system = get("chat-system"), reasoning = get("chat-reasoning"), tools = get("chat-tools");
+	const status = get("chat-status"), reasoningHint = get("chat-reasoning-hint");
+	if (!config || !model || !messages || !input || !send || !errorLine || !reset || !system || !reasoning || !tools || !status) return;
 	const storageKey = "ai-router-chat:" + config.userId;
-	const maxMessages = 100;
-	const maxContent = 100000;
-	// Options the current session may use; the server re-checks grants and
-	// the protocol for every request, so a stale selection is harmless.
-	const options = [...model.options].map(option => option.value).filter(value => value !== "");
-	if (options.length === 0) return;
+	const maxMessages = 100, maxContent = 100000, maxSteps = 6, maxTools = 4;
+	const options = [...model.options].map(option => option.value).filter(Boolean);
+	const now = () => performance.now();
+	const modes = ["default", "enabled", "disabled"];
+	const toolSchema = {type: "function", function: {name: "browser_javascript",
+		description: "Run JavaScript for calculations or data processing in an isolated browser worker. Use return for a result or console.log. No page DOM, network, credentials or storage. Each call has a 5-second deadline and 16000-character output limit.",
+		parameters: {type: "object", properties: {code: {type: "string"}}, required: ["code"], additionalProperties: false}}};
+	let history = [], active = null;
+	tools.checked = false; // Never silently re-enable automatic execution after reload.
 
-	let history = [];
-	let active = null; // AbortController while a reply is streaming
-	let assistant = null; // {node, body, content, text, reasoning, reasoningNode}
-
-	const appendHistory = (role, content) => {
-		history.push({role, content: content.slice(0, maxContent)});
+	// Remove only leading blank lines in presentation. Keep indentation and the
+	// original protocol content (including whitespace) for subsequent requests.
+	const visibleText = text => text.replace(/^(?:[\t ]*\r?\n)+/, "");
+	const trimHistory = () => {
 		history = history.slice(-maxMessages);
+		while (history.length && history[0].role !== "user") history.shift();
 	};
-
 	const save = () => {
-		try {
-			localStorage.setItem(storageKey, JSON.stringify({
-				model: model.value,
-				messages: history.slice(-maxMessages),
-			}));
-		} catch (_) { /* Storage may be disabled; the chat still works for this page load. */ }
+		try { localStorage.setItem(storageKey, JSON.stringify({version: 2, model: model.value,
+			settings: {systemPrompt: system.value.slice(0, maxContent), reasoning: reasoning.value}, messages: history})); }
+		catch (_) { /* The page still works without browser storage. */ }
 	};
-
-	const addMessage = (role, text) => {
-		const node = document.createElement("div");
-		node.className = "msg " + role;
-		const meta = document.createElement("div");
-		meta.className = "meta";
-		meta.textContent = role === "user" ? "You" : "Assistant";
-		const body = document.createElement("div");
-		body.className = "body";
-		const content = document.createElement("div");
-		content.className = "content";
-		content.textContent = text;
-		body.appendChild(content);
-		node.appendChild(meta);
-		node.appendChild(body);
-		messages.appendChild(node);
-		messages.scrollTop = messages.scrollHeight;
+	const appendHistory = item => { history.push(item); trimHistory(); save(); };
+	const scroll = () => { messages.scrollTop = messages.scrollHeight; };
+	const element = (tag, className, text) => {
+		const node = document.createElement(tag);
+		node.className = className;
+		if (text !== undefined) node.textContent = text;
+		return node;
+	};
+	const addMessage = (role, text = "") => {
+		const node = element("div", "msg " + role);
+		const meta = element("div", "meta", role === "user" ? "You" : role === "tool" ? "JavaScript result" : "Assistant");
+		const body = element("div", "body"), content = element("div", "content", role === "assistant" ? visibleText(text) : text);
+		body.appendChild(content); node.appendChild(meta); node.appendChild(body); messages.appendChild(node); scroll();
 		return {node, body, content};
+	};
+	const addReasoning = (bubble, text) => {
+		const details = element("details", "reasoning"), summary = element("summary", "", "Reasoning");
+		const content = element("div", "reasoning-content", text);
+		details.appendChild(summary); details.appendChild(content); bubble.body.insertBefore(details, bubble.content);
+		return content;
+	};
+	const showTools = (bubble, calls) => {
+		if (!bubble.toolsNode) { bubble.toolsNode = element("div", "tool-calls"); bubble.body.appendChild(bubble.toolsNode); }
+		bubble.toolsNode.replaceChildren();
+		for (const call of calls) {
+			const details = element("details", "tool-call");
+			details.appendChild(element("summary", "", "Tool: " + (call.function.name || "pending")));
+			let text = call.function.arguments;
+			try { const args = JSON.parse(text); if (typeof args.code === "string") text = args.code; } catch (_) {}
+			details.appendChild(element("pre", "tool-code", text)); bubble.toolsNode.appendChild(details);
+		}
+	};
+	const seconds = ms => (ms / 1000).toFixed(3) + "s";
+	const updateStats = (bubble, stats) => {
+		if (!bubble.statsNode) { bubble.statsNode = element("div", "inference-stats"); bubble.node.appendChild(bubble.statsNode); }
+		const usage = stats.usage, duration = stats.endedAt - stats.startedAt;
+		const parts = [stats.model, "Chat Completions / SSE"];
+		if (stats.kind) parts.push(stats.kind);
+		if (stats.channel) parts.push(stats.channel + "/" + stats.upstreamModel);
+		if (usage) {
+			parts.push("in " + usage.input, "out " + usage.output);
+			parts.push(usage.cached === null ? "cache —" : "cache " + usage.cached + (usage.input > 0 ? " (" + (usage.cached / usage.input * 100).toFixed(1) + "%)" : ""));
+		} else parts.push("tokens — (not reported)");
+		parts.push("TTFT " + (stats.firstAt === null ? "—" : seconds(stats.firstAt - stats.startedAt)), "total " + seconds(duration));
+		parts.push(usage && stats.firstAt !== null && stats.endedAt > stats.firstAt && stats.state === "complete"
+			? (usage.output * 1000 / (stats.endedAt - stats.firstAt)).toFixed(1) + " tok/s" : "speed —");
+		parts.push(stats.state === "complete" ? stats.finishReason || "complete" : stats.state + (stats.finishReason ? " (" + stats.finishReason + ")" : ""));
+		if (stats.id) parts.push("id " + stats.id);
+		bubble.statsNode.textContent = parts.join(" · ");
+	};
+	const parseUsage = value => {
+		const finite = n => typeof n === "number" && Number.isFinite(n) && n >= 0;
+		if (!value || !finite(value.prompt_tokens) || !finite(value.completion_tokens)) return null;
+		const cached = value.prompt_tokens_details && value.prompt_tokens_details.cached_tokens;
+		return {input: value.prompt_tokens, output: value.completion_tokens, cached: finite(cached) ? cached : null};
+	};
+	const setBusy = busy => {
+		send.disabled = !model.value; send.textContent = busy ? "Stop" : "Send";
+		input.disabled = busy || !model.value;
+		for (const control of [model, reset, system, reasoning, tools]) control.disabled = busy;
+		model.disabled = busy || options.length === 0;
+	};
+	const hint = () => {
+		if (!reasoningHint) return;
+		const info = (config.modelInfo || {})[model.value];
+		reasoningHint.textContent = info && info.kind === "zai"
+			? "Reasoning mode uses Z.ai thinking.type. Only reasoning returned by the provider can be displayed."
+			: "Reasoning mode uses chat_template_kwargs.enable_thinking. Compatible servers may ignore or reject it; Provider default sends no override.";
 	};
 
 	const restore = () => {
-		let saved = null;
-		try {
-			const raw = localStorage.getItem(storageKey);
-			if (raw) saved = JSON.parse(raw);
-		} catch (_) { saved = null; }
-		if (saved) {
-			if (typeof saved.model === "string" && options.includes(saved.model)) {
-				model.value = saved.model;
-			}
-			if (Array.isArray(saved.messages)) {
-				for (const item of saved.messages) {
-					if (!item || (item.role !== "user" && item.role !== "assistant")) continue;
-					if (typeof item.content !== "string" || item.content === "") continue;
-					history.push({role: item.role, content: item.content.slice(0, maxContent)});
+		let saved;
+		try { saved = JSON.parse(localStorage.getItem(storageKey) || "null"); } catch (_) {}
+		if (!saved || typeof saved !== "object") return;
+		if (options.includes(saved.model)) model.value = saved.model;
+		if (saved.settings && typeof saved.settings.systemPrompt === "string") system.value = saved.settings.systemPrompt.slice(0, maxContent);
+		if (saved.settings && modes.includes(saved.settings.reasoning)) reasoning.value = saved.settings.reasoning;
+		if (!Array.isArray(saved.messages)) return;
+		let pending = [];
+		for (const raw of saved.messages.slice(-maxMessages)) {
+			if (!raw || typeof raw.content !== "string") continue;
+			const item = {role: raw.role, content: raw.content.slice(0, maxContent)};
+			if (item.role === "user") { if (pending.length) break; if (item.content) history.push(item); }
+			else if (item.role === "assistant" && history.length && !pending.length) {
+				if (typeof raw.reasoning_content === "string") item.reasoning_content = raw.reasoning_content.slice(0, maxContent);
+				if (Array.isArray(raw.tool_calls) && raw.tool_calls.length > 0 && raw.tool_calls.length <= maxTools) {
+					const ids = new Set();
+					const valid = raw.tool_calls.every(call => call && typeof call.id === "string" && call.id.length > 0 && call.id.length <= 200
+						&& !ids.has(call.id) && ids.add(call.id) && call.type === "function" && call.function
+						&& typeof call.function.name === "string" && call.function.name.length <= 100
+						&& typeof call.function.arguments === "string" && call.function.arguments.length <= 24000);
+					if (!valid) continue;
+					item.tool_calls = raw.tool_calls.map(call => ({id: call.id, type: "function", function: {name: call.function.name, arguments: call.function.arguments}}));
+					pending = item.tool_calls.map(call => call.id);
 				}
-				history = history.slice(-maxMessages);
-				for (const item of history) addMessage(item.role, item.content);
+				if (item.content.trim() || item.reasoning_content || item.tool_calls) history.push(item);
+			} else if (item.role === "tool" && pending.includes(raw.tool_call_id)) {
+				item.tool_call_id = raw.tool_call_id; pending = pending.filter(id => id !== item.tool_call_id); history.push(item);
 			}
 		}
-	};
-
-	const setBusy = busy => {
-		send.disabled = false;
-		send.textContent = busy ? "Stop" : "Send";
-		input.disabled = busy;
-	};
-
-	const fail = message => {
-		errorLine.textContent = message;
-	};
-
-	const applyDelta = payload => {
-		if (payload === "[DONE]" || !assistant) return;
-		let parsed;
-		try { parsed = JSON.parse(payload); } catch (_) { return; }
-		if (parsed && parsed.error && typeof parsed.error.message === "string") {
-			fail(parsed.error.message);
-			return;
+		// Drop an incomplete restored tool exchange rather than inventing results.
+		if (pending.length) { while (history.length && !history[history.length - 1].tool_calls) history.pop(); history.pop(); }
+		trimHistory();
+		for (const item of history) {
+			const bubble = addMessage(item.role, item.content);
+			if (item.reasoning_content) addReasoning(bubble, item.reasoning_content);
+			if (item.tool_calls) showTools(bubble, item.tool_calls);
+			if (item.role === "assistant" && !item.content.trim() && (item.reasoning_content || item.tool_calls)) bubble.content.hidden = true;
 		}
-		if (!parsed || !Array.isArray(parsed.choices)) return;
-		const delta = parsed.choices[0] && parsed.choices[0].delta;
-		if (!delta) return;
-		if (typeof delta.reasoning_content === "string" && delta.reasoning_content !== "") {
-			assistant.reasoning += delta.reasoning_content;
-			if (!assistant.reasoningNode) {
-				assistant.reasoningNode = document.createElement("div");
-				assistant.reasoningNode.className = "reasoning";
-				assistant.body.insertBefore(assistant.reasoningNode, assistant.content);
+	};
+
+	const complete = async (turn, step) => {
+		const bubble = addMessage("assistant"), info = (config.modelInfo || {})[turn.model] || {};
+		const stats = {model: turn.model, kind: info.kind, channel: info.channel, upstreamModel: info.upstreamModel,
+			startedAt: now(), endedAt: 0, firstAt: null, usage: null, finishReason: "", id: "", state: "receiving"};
+		let text = "", thought = "", thoughtNode = null, done = false, failed = false;
+		const calls = [];
+		const fail = message => { failed = true; errorLine.textContent = message; };
+		const output = () => { if (stats.firstAt === null) stats.firstAt = now(); };
+		const apply = payload => {
+			if (done || turn.controller.signal.aborted) return;
+			if (payload === "[DONE]") { done = true; return; }
+			let parsed;
+			try { parsed = JSON.parse(payload); } catch (_) { throw new Error("Invalid stream data."); }
+			if (parsed && parsed.error) { fail(typeof parsed.error.message === "string" ? parsed.error.message : "Inference failed."); return; }
+			if (!parsed || !Array.isArray(parsed.choices)) return;
+			if (typeof parsed.id === "string") stats.id = parsed.id.slice(0, 200);
+			if (parsed.usage) stats.usage = parseUsage(parsed.usage);
+			const choice = parsed.choices[0];
+			if (!choice) return;
+			if (typeof choice.finish_reason === "string") stats.finishReason = choice.finish_reason.slice(0, 80);
+			const delta = choice.delta || {};
+			for (const [field, value] of [["content", delta.content], ["reasoning", delta.reasoning_content]]) {
+				if (typeof value !== "string" || !value) continue;
+				output();
+				if (field === "content") {
+					if (text.length + value.length > maxContent) throw new Error("Reply exceeded the browser content limit.");
+					text += value; bubble.content.textContent = visibleText(text);
+				} else {
+					if (thought.length + value.length > maxContent) throw new Error("Reasoning exceeded the browser content limit.");
+					thought += value;
+					if (!thoughtNode) thoughtNode = addReasoning(bubble, "");
+					thoughtNode.textContent = thought;
+				}
 			}
-			assistant.reasoningNode.textContent = assistant.reasoning;
-		}
-		if (typeof delta.content === "string" && delta.content !== "") {
-			assistant.text += delta.content;
-			assistant.content.textContent = assistant.text;
-		}
-		messages.scrollTop = messages.scrollHeight;
-	};
-
-	const finish = () => {
-		setBusy(false);
-		active = null;
-		if (!assistant) return;
-		const done = assistant;
-		assistant = null;
-		if (done.text === "") {
-			if (done.node.parentElement) done.node.parentElement.removeChild(done.node);
-			if (done.reasoning !== "") {
-				// Reasoning-only reply: keep it, it is still useful output.
-				appendHistory("assistant", done.reasoning);
-				save();
-			} else if (errorLine.textContent === "") {
-				fail("No reply was received.");
+			if (Array.isArray(delta.tool_calls)) {
+				for (const part of delta.tool_calls) {
+					if (!Number.isInteger(part.index) || part.index < 0 || part.index >= maxTools) throw new Error("Too many or invalid tool calls.");
+					const call = calls[part.index] || (calls[part.index] = {id: "", type: "function", function: {name: "", arguments: ""}});
+					if (typeof part.id === "string") call.id += part.id;
+					if (part.function && typeof part.function.name === "string" && part.function.name) { call.function.name += part.function.name; output(); }
+					if (part.function && typeof part.function.arguments === "string" && part.function.arguments) { call.function.arguments += part.function.arguments; output(); }
+					if (call.id.length > 200 || call.function.name.length > 100 || call.function.arguments.length > 24000) throw new Error("Tool call exceeds the browser limit.");
+				}
+				showTools(bubble, calls.filter(Boolean));
 			}
-		} else {
-			appendHistory("assistant", done.text);
-			save();
+			stats.endedAt = now(); updateStats(bubble, stats); scroll();
+		};
+		const body = {model: turn.model, messages: history.map(item => ({...item})), stream: true, stream_options: {include_usage: true}};
+		if (turn.systemPrompt) body.messages.unshift({role: "system", content: turn.systemPrompt});
+		if (turn.reasoning !== "default") {
+			if (info.kind === "zai") body.thinking = {type: turn.reasoning};
+			else body.chat_template_kwargs = {enable_thinking: turn.reasoning === "enabled"};
 		}
+		if (turn.tools) { body.tools = [toolSchema]; body.tool_choice = step === maxSteps - 1 ? "none" : "auto"; }
+		status.textContent = "Inference " + (step + 1) + "/" + maxSteps + " · receiving";
+		let reader;
+		try {
+			const response = await fetch("/chat/completions", {method: "POST", credentials: "same-origin",
+				headers: {"Content-Type": "application/json", "X-CSRF-Token": config.csrfToken}, body: JSON.stringify(body), signal: turn.controller.signal});
+			if (response.status === 401) { window.location.href = "/login"; failed = true; }
+			else if (!response.ok) {
+				let message = "Request failed (HTTP " + response.status + ").";
+				try { const value = JSON.parse(await response.text()); if (value && value.error && typeof value.error.message === "string") message = value.error.message; } catch (_) {}
+				fail(message);
+			} else {
+				reader = response.body.getReader();
+				const decoder = new TextDecoder(); let buffer = "";
+				for (;;) {
+					const chunk = await reader.read();
+					if (turn.controller.signal.aborted) break;
+					buffer = (buffer + decoder.decode(chunk.value || new Uint8Array(), {stream: !chunk.done})).replace(/\r\n/g, "\n");
+					if (buffer.length > 1024 * 1024) throw new Error("Stream frame exceeds the browser limit.");
+					let index;
+					while (!done && (index = buffer.indexOf("\n\n")) >= 0) {
+						const frame = buffer.slice(0, index); buffer = buffer.slice(index + 2);
+						const data = frame.split("\n").filter(line => line.startsWith("data:")).map(line => line.slice(5).replace(/^ /, ""));
+						if (data.length) apply(data.join("\n"));
+					}
+					if (chunk.done) break;
+				}
+				if (!done && !turn.controller.signal.aborted) fail("The stream ended before completion.");
+			}
+		} catch (error) {
+			if (!error || error.name !== "AbortError") fail(error && error.message || "Network error while receiving the reply.");
+		} finally {
+			if (reader && reader.cancel) { try { await reader.cancel(); } catch (_) {} }
+			stats.endedAt = now(); stats.state = turn.controller.signal.aborted ? "stopped" : failed ? "failed" : "complete";
+			updateStats(bubble, stats);
+			if (!text.trim() && (thought || calls.length)) bubble.content.hidden = true;
+		}
+		const ids = new Set();
+		const validCalls = calls.length && Array.from(calls).every(call => call && call.id && !ids.has(call.id) && ids.add(call.id) && call.function.name);
+		const toolCalls = validCalls && done && !failed && !turn.controller.signal.aborted && (stats.finishReason === "tool_calls" || stats.finishReason === "stop") ? calls : [];
+		if (calls.length && !toolCalls.length && !turn.controller.signal.aborted && !failed) {
+			fail("Incomplete or invalid tool call; nothing was executed."); stats.state = "failed"; updateStats(bubble, stats);
+		}
+		if (!text.trim() && !thought && !calls.length) {
+			bubble.node.remove();
+			if (!failed && !turn.controller.signal.aborted) fail("No reply was received.");
+		}
+		const record = text.trim() || thought || toolCalls.length ? {role: "assistant", content: text} : null;
+		if (record && thought) record.reasoning_content = thought;
+		if (record && toolCalls.length) record.tool_calls = toolCalls;
+		return {record, calls: toolCalls, complete: done && !failed && !turn.controller.signal.aborted};
 	};
 
 	const run = async () => {
 		const text = input.value.trim().slice(0, maxContent);
-		const selected = model.value;
-		if (!text || !selected || active) return;
-		errorLine.textContent = "";
-		appendHistory("user", text);
-		addMessage("user", text);
-		input.value = "";
-		const bubble = addMessage("assistant", "");
-		assistant = {
-			node: bubble.node,
-			body: bubble.body,
-			content: bubble.content,
-			text: "",
-			reasoning: "",
-			reasoningNode: null,
-		};
-		setBusy(true);
-		const abort = new AbortController();
-		active = abort;
+		if (!text || !model.value || active) return;
+		const turn = {controller: new AbortController(), model: model.value, systemPrompt: system.value.slice(0, maxContent),
+			reasoning: modes.includes(reasoning.value) ? reasoning.value : "default", tools: tools.checked};
+		active = turn; errorLine.textContent = ""; input.value = "";
+		appendHistory({role: "user", content: text}); addMessage("user", text); setBusy(true);
+		let count = 0, toolCount = 0;
 		try {
-			let response;
-			try {
-				response = await fetch("/chat/completions", {
-					method: "POST",
-					credentials: "same-origin",
-					headers: {
-						"Content-Type": "application/json",
-						"X-CSRF-Token": config.csrfToken,
-					},
-					body: JSON.stringify({
-						model: selected,
-						messages: history.map(item => ({role: item.role, content: item.content})),
-						stream: true,
-					}),
-					signal: abort.signal,
-				});
-			} catch (err) {
-				if (!err || err.name !== "AbortError") fail("Network error — the request did not reach the router.");
-				return;
-			}
-			if (response.status === 401) {
-				window.location.href = "/login";
-				return;
-			}
-			if (!response.ok) {
-				let message = "Request failed (HTTP " + response.status + ").";
-				try {
-					const parsed = JSON.parse(await response.text());
-					if (parsed && parsed.error && typeof parsed.error.message === "string") {
-						message = parsed.error.message;
+			for (let step = 0; step < maxSteps; step++) {
+				if (turn.controller.signal.aborted) break;
+				count++;
+				const result = await complete(turn, step);
+				if (result.record) appendHistory(result.record);
+				if (!result.complete || !result.calls.length) break;
+				for (const call of result.calls) {
+					let value;
+					if (turn.controller.signal.aborted) value = {ok: false, output: "Tool execution cancelled."};
+					else if (!turn.tools) value = {ok: false, output: "Browser tools are disabled."};
+					else if (step === maxSteps - 1) value = {ok: false, output: "Inference step limit reached; tool was not executed."};
+					else {
+						status.textContent = "Running JavaScript · call " + (toolCount + 1);
+						try {
+							const args = JSON.parse(call.function.arguments);
+							if (call.function.name !== "browser_javascript" || !args || typeof args.code !== "string" || Object.keys(args).some(key => key !== "code")) throw new Error("Invalid JavaScript tool name or arguments.");
+							if (!window.routerChatTools) throw new Error("JavaScript sandbox is unavailable.");
+							toolCount++;
+							value = await window.routerChatTools.runJavaScript(args.code, {signal: turn.controller.signal});
+						} catch (error) { value = {ok: false, output: error && error.name === "AbortError" ? "Tool execution cancelled." : String(error && error.message || "Tool failed.").slice(0, 16000)}; }
 					}
-				} catch (_) {}
-				fail(message);
-				return;
-			}
-			let buffer = "";
-			const decoder = new TextDecoder();
-			try {
-				const reader = response.body.getReader();
-				for (;;) {
-					const chunk = await reader.read();
-					if (chunk.done) break;
-					buffer += decoder.decode(chunk.value, {stream: true});
-					for (;;) {
-						const index = buffer.indexOf("\n\n");
-						if (index < 0) break;
-						const frame = buffer.slice(0, index);
-						buffer = buffer.slice(index + 2);
-						for (const line of frame.split("\n")) {
-							if (line.startsWith("data: ")) applyDelta(line.slice(6));
-						}
-					}
+					const content = JSON.stringify(value).slice(0, maxContent);
+					appendHistory({role: "tool", tool_call_id: call.id, content}); addMessage("tool", content);
 				}
-			} catch (err) {
-				if (!err || err.name !== "AbortError") fail("The connection dropped while receiving the reply.");
+				if (!turn.tools || step === maxSteps - 1) { errorLine.textContent = !turn.tools ? "The model requested a tool, but tools are disabled." : "Stopped at the six-request tool loop limit."; break; }
 			}
-		} finally {
-			// Every exit path (done, error, 401, abort) settles the UI state.
-			finish();
+		} catch (_) { errorLine.textContent = "The chat could not finish this turn."; }
+		finally {
+			active = null; setBusy(false); save();
+			status.textContent = (turn.controller.signal.aborted ? "Stopped" : errorLine.textContent ? "Failed" : "Completed")
+				+ " · " + count + " inference request(s) · " + toolCount + " JavaScript call(s)";
 		}
 	};
-
-	send.addEventListener("click", () => {
-		if (active) active.abort();
-		else run();
+	send.addEventListener("click", () => { if (active) active.controller.abort(); else run(); });
+	input.addEventListener("keydown", event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); run(); } });
+	reset.addEventListener("click", () => {
+		if (active) return;
+		history = []; messages.replaceChildren(); input.value = ""; errorLine.textContent = ""; status.textContent = "New conversation. Settings kept."; save();
 	});
-	input.addEventListener("keydown", event => {
-		if (event.key === "Enter" && !event.shiftKey) {
-			event.preventDefault();
-			run();
-		}
-	});
-	model.addEventListener("change", save);
-	restore();
+	model.addEventListener("change", () => { hint(); save(); });
+	system.addEventListener("input", save); reasoning.addEventListener("change", save);
+	restore(); hint(); setBusy(false);
 })();

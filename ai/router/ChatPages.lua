@@ -48,7 +48,7 @@ function ChatPages:new(options)
 		digest.hash("sha256", options.session_secret .. "\0ai-router-chat", true))
 	self.stylesheet = io_util.read_file(chat_dir .. "/chat.css")
 	self.theme_script = io_util.read_file(chat_dir .. "/theme.js")
-	self.chat_script = io_util.read_file(chat_dir .. "/chat.js")
+	self.chat_script = io_util.read_file(chat_dir .. "/tools.js") .. "\n" .. io_util.read_file(chat_dir .. "/chat.js")
 	self.templates = {}
 	self.templates.login = etlua.compile(io_util.read_file(chat_dir .. "/login.etlua"), "@chat/login")
 	self.templates.chat = etlua.compile(io_util.read_file(chat_dir .. "/chat.etlua"), "@chat/chat")
@@ -199,7 +199,14 @@ end
 ---@param user ai.router.UserRow
 function ChatPages:renderChat(res, session, user)
 	local models = self:chatModels(user)
-	local config = json.encode({csrfToken = session.csrf_token, userId = user.id, model = models[1] or ""})
+	local model_info = json.object({})
+	for _, model in ipairs(models) do
+		local candidate = assert(self.server.inference.router:resolve(model))
+		model_info[model] = {kind = candidate.channel.kind, channel = candidate.channel.name,
+			upstreamModel = candidate.upstream_model}
+	end
+	local config = json.encode({csrfToken = session.csrf_token, userId = user.id, model = models[1] or "",
+		modelInfo = model_info})
 	-- Keep the inline JSON from closing the script element; "\/" is still valid JSON.
 	config = config:gsub("</", "<\\/")
 	send(res, 200, self.templates.layout({

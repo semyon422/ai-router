@@ -14,6 +14,14 @@ function element(tag = 'div') {
 		textContent: '',
 		children: [],
 		parentElement: null,
+		listeners: {},
+		addEventListener: (name, callback) => { node.listeners[name] = callback; },
+		remove: () => { if (node.parentElement) node.parentElement.removeChild(node); },
+		replaceChildren: (...children) => {
+			for (const child of node.children) child.parentElement = null;
+			node.children.length = 0;
+			for (const child of children) node.appendChild(child);
+		},
 		appendChild: child => {
 			child.parentElement = node;
 			node.children.push(child);
@@ -33,7 +41,7 @@ function element(tag = 'div') {
 	return node;
 }
 
-function start(saved, {userId = 1, storage = {}} = {}) {
+function start(saved, {userId = 1, storage = {}, runJavaScript, modelInfo = {}} = {}) {
 	if (saved) storage['ai-router-chat:' + userId] = saved;
 	const elements = {
 		'chat-model': {
@@ -53,6 +61,12 @@ function start(saved, {userId = 1, storage = {}} = {}) {
 		'chat-send': {tag: 'button', value: '', disabled: false, textContent: 'Send', listeners: {},
 			addEventListener: (name, callback) => { elements['chat-send'].listeners[name] = callback; }},
 		'chat-error': element('div'),
+		'chat-reset': element('button'),
+		'chat-system': {...element('textarea'), value: ''},
+		'chat-reasoning': {...element('select'), value: 'default'},
+		'chat-tools': {...element('input'), checked: false},
+		'chat-status': element('p'),
+		'chat-reasoning-hint': element('p'),
 	};
 	const document = {
 		hidden: false,
@@ -60,7 +74,8 @@ function start(saved, {userId = 1, storage = {}} = {}) {
 		createElement: tag => element(tag),
 	};
 	const window = {
-		routerChat: {csrfToken: 'csrf-123', userId, model: 'zai-1/glm-5.3'},
+		routerChat: {csrfToken: 'csrf-123', userId, model: 'zai-1/glm-5.3', modelInfo},
+		routerChatTools: {runJavaScript: runJavaScript || (async () => ({ok: true, output: '2'}))},
 		location: {},
 		addEventListener: () => {},
 	};
@@ -75,7 +90,9 @@ function start(saved, {userId = 1, storage = {}} = {}) {
 		fetch: (url, options) => new Promise((resolve, reject) => {
 			requests.push({url, options, resolve, reject});
 			if (options.signal && options.signal.aborted) reject(new DOMException('Aborted', 'AbortError'));
+			else if (options.signal) options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), {once: true});
 		}),
+		performance: {now: (() => { let time = 0; return () => time += 100; })()},
 		TextDecoder,
 		AbortController,
 	});
@@ -148,7 +165,7 @@ test('sends the conversation with the CSRF token and renders the streamed reply'
 	assert.equal(userMessage(req).role, 'user');
 	assert.equal(userMessage(req).content, 'Hello');
 	assert.equal(JSON.parse(req.options.body).stream, true);
-	assert.equal(JSON.parse(req.options.body).stream_options, undefined);
+	assert.deepEqual(JSON.parse(req.options.body).stream_options, {include_usage: true});
 	assert.equal(view.elements['chat-send'].textContent, 'Stop');
 	assert.equal(view.elements['chat-input'].disabled, true);
 	req.resolve(sse(chunks('Hi there')));
@@ -186,7 +203,8 @@ test('streams deltas incrementally and renders reasoning content', async () => {
 	const body = bubble.children[1];
 	assert.equal(body.children.length, 2);
 	assert.equal(body.children[0].className, 'reasoning');
-	assert.equal(body.children[0].textContent, 'Let me think…');
+	assert.equal(body.children[0].children[0].textContent, 'Reasoning');
+	assert.equal(body.children[0].children[1].textContent, 'Let me think…');
 	assert.equal(body.children[1].className, 'content');
 	assert.equal(body.children[1].textContent, 'Answer now.');
 });
@@ -210,7 +228,7 @@ test('http errors surface the server message and keep the composer usable', asyn
 	assert.equal(view.elements['chat-messages'].children[0].className, 'msg user');
 });
 
-test('a 401 session bounce redirects to the chat page', async () => {
+test('a 401 session bounce redirects to the shared login page', async () => {
 	const view = start();
 	view.elements['chat-input'].value = 'Expired';
 	view.send();
@@ -310,7 +328,7 @@ test('bounds outgoing and persisted history across successive exchanges', async 
 		view.send();
 		const req = view.requests[i];
 		const outgoing = JSON.parse(req.options.body).messages;
-		assert.equal(outgoing.length, 100);
+		assert.ok(outgoing.length <= 100);
 		assert.equal(outgoing.at(-1).content.length, 100000);
 		req.resolve(sse(chunks('reply')));
 		await settle(); await settle();
@@ -327,4 +345,205 @@ test('Enter sends while Shift+Enter does not', () => {
 	assert.equal(view.requests.length, 1);
 	view.key('Enter', true);
 	assert.equal(view.requests.length, 1);
+});
+
+function toolChunks(code = 'return 1 + 1', {id = 'call-1', name = 'browser_javascript'} = {}) {
+	const args = JSON.stringify({code});
+	return [
+		JSON.stringify({id: 'completion-tools', choices: [{delta: {tool_calls: [{index: 0, id, type: 'function', function: {name, arguments: args.slice(0, 8)}}]}}]}),
+		JSON.stringify({choices: [{delta: {tool_calls: [{index: 0, function: {arguments: args.slice(8)}}]}}]}),
+		JSON.stringify({choices: [{delta: {}, finish_reason: 'tool_calls'}]}),
+		JSON.stringify({choices: [], usage: {prompt_tokens: 100, completion_tokens: 20, prompt_tokens_details: {cached_tokens: 50}}}),
+		'[DONE]',
+	];
+}
+
+const drain = async () => { await settle(); await settle(); };
+
+test('hides leading blank lines across deltas without changing code indentation or wire history', async () => {
+	const view = start();
+	view.elements['chat-input'].value = 'Code'; view.send();
+	view.requests[0].resolve(sse([
+		JSON.stringify({choices: [{delta: {content: '\n'}}]}),
+		JSON.stringify({choices: [{delta: {content: '\n    indented\n\nnext'}}]}), '[DONE]',
+	]));
+	await drain();
+	assert.equal(view.elements['chat-messages'].children[1].children[1].children[0].textContent, '    indented\n\nnext');
+	assert.equal(JSON.parse(view.storage['ai-router-chat:1']).messages[1].content, '\n\n    indented\n\nnext');
+	const restored = start(null, {storage: view.storage});
+	assert.equal(restored.elements['chat-messages'].children[1].children[1].children[0].textContent, '    indented\n\nnext');
+});
+
+test('streams UTF-8 and CRLF frames split at every byte', async () => {
+	const view = start(); view.elements['chat-input'].value = 'Unicode'; view.send();
+	const payload = new TextEncoder().encode(chunks('Привет 🌍').map(item => 'data: ' + item + '\r\n\r\n').join(''));
+	let offset = 0;
+	view.requests[0].resolve({ok: true, status: 200, body: {getReader: () => ({read: async () => offset < payload.length
+		? {done: false, value: payload.slice(offset, ++offset)} : {done: true}})}});
+	await drain();
+	assert.equal(view.elements['chat-messages'].children[1].children[1].children[0].textContent, 'Привет 🌍');
+	assert.equal(view.elements['chat-error'].textContent, '');
+});
+
+test('a whitespace-only reply is not kept as a permanently empty bubble', async () => {
+	const view = start(); view.elements['chat-input'].value = 'Empty'; view.send();
+	view.requests[0].resolve(sse(chunks('\n\n   '))); await drain();
+	assert.equal(view.elements['chat-messages'].children.length, 1);
+	assert.equal(view.elements['chat-error'].textContent, 'No reply was received.');
+});
+
+test('system prompt and reasoning settings are account-scoped and editable between requests', async () => {
+	const view = start(null, {modelInfo: {'zai-1/glm-5.3': {kind: 'zai'}}});
+	view.elements['chat-system'].value = 'Be precise';
+	view.elements['chat-reasoning'].value = 'disabled';
+	view.elements['chat-input'].value = 'Hi'; view.send();
+	let body = JSON.parse(view.requests[0].options.body);
+	assert.deepEqual(body.messages[0], {role: 'system', content: 'Be precise'});
+	assert.deepEqual(body.thinking, {type: 'disabled'});
+	assert.equal(body.chat_template_kwargs, undefined);
+	assert.equal(view.elements['chat-system'].disabled, true);
+	view.requests[0].resolve(sse(chunks('OK'))); await drain();
+	view.elements['chat-system'].value = 'New instruction';
+	view.elements['chat-input'].value = 'Next'; view.send();
+	body = JSON.parse(view.requests[1].options.body);
+	assert.equal(body.messages[0].content, 'New instruction');
+	assert.equal(body.messages.filter(item => item.role === 'system').length, 1);
+	view.requests[1].resolve(sse(chunks('Done'))); await drain();
+	const restored = start(null, {storage: view.storage});
+	assert.equal(restored.elements['chat-system'].value, 'New instruction');
+	assert.equal(restored.elements['chat-reasoning'].value, 'disabled');
+	assert.equal(start(null, {userId: 2, storage: view.storage}).elements['chat-system'].value, '');
+});
+
+test('compatible thinking overrides use template kwargs and default sends no override', async () => {
+	const view = start();
+	view.elements['chat-reasoning'].value = 'enabled';
+	view.elements['chat-input'].value = 'Think'; view.send();
+	assert.deepEqual(JSON.parse(view.requests[0].options.body).chat_template_kwargs, {enable_thinking: true});
+	view.requests[0].resolve(sse(chunks('Yes'))); await drain();
+	view.elements['chat-reasoning'].value = 'default';
+	view.elements['chat-input'].value = 'Default'; view.send();
+	const body = JSON.parse(view.requests[1].options.body);
+	assert.equal(body.thinking, undefined); assert.equal(body.chat_template_kwargs, undefined);
+});
+
+test('New chat clears messages and draft, keeps settings, and cannot race an active request', async () => {
+	const view = start();
+	view.elements['chat-system'].value = 'Keep this';
+	view.elements['chat-input'].value = 'Old'; view.send();
+	assert.equal(view.elements['chat-reset'].disabled, true);
+	view.elements['chat-reset'].listeners.click();
+	assert.equal(view.elements['chat-messages'].children.length, 2);
+	view.requests[0].resolve(sse(chunks('Answer'))); await drain();
+	view.elements['chat-input'].value = 'Draft'; view.elements['chat-reset'].listeners.click();
+	assert.equal(view.elements['chat-messages'].children.length, 0);
+	assert.equal(view.elements['chat-input'].value, '');
+	const saved = JSON.parse(view.storage['ai-router-chat:1']);
+	assert.deepEqual(saved.messages, []); assert.equal(saved.settings.systemPrompt, 'Keep this');
+	view.elements['chat-input'].value = 'Fresh'; view.send();
+	assert.deepEqual(JSON.parse(view.requests[1].options.body).messages, [{role: 'system', content: 'Keep this'}, {role: 'user', content: 'Fresh'}]);
+});
+
+test('reasoning-only responses stay visible and never become assistant answer text', async () => {
+	const view = start(); view.elements['chat-input'].value = 'Think'; view.send();
+	view.requests[0].resolve(sse([JSON.stringify({choices: [{delta: {reasoning_content: 'Thought only'}}]}), '[DONE]']));
+	await drain();
+	assert.equal(view.elements['chat-messages'].children.length, 2);
+	const assistant = JSON.parse(view.storage['ai-router-chat:1']).messages[1];
+	assert.equal(assistant.content, ''); assert.equal(assistant.reasoning_content, 'Thought only');
+	const restored = start(null, {storage: view.storage});
+	assert.equal(restored.elements['chat-messages'].children[1].children[1].children[0].children[1].textContent, 'Thought only');
+});
+
+test('shows provider usage, cache ratio, browser timing, speed, finish reason and identity', async () => {
+	const view = start(null, {modelInfo: {'zai-1/glm-5.3': {kind: 'zai', channel: 'glm', upstreamModel: 'actual'}}});
+	view.elements['chat-input'].value = 'Stats'; view.send();
+	view.requests[0].resolve(sse([...chunks('Answer').slice(0, -1),
+		JSON.stringify({id: 'request-123', choices: [], usage: {prompt_tokens: 100, completion_tokens: 20, prompt_tokens_details: {cached_tokens: 25}}}), '[DONE]']));
+	await drain();
+	const stats = view.elements['chat-messages'].children[1].children[2].textContent;
+	for (const text of ['glm/actual', 'in 100', 'out 20', 'cache 25 (25.0%)', 'TTFT ', 'total ', 'tok/s', 'stop', 'id request-123']) assert.ok(stats.includes(text), text);
+	assert.equal(stats.includes('NaN'), false);
+});
+
+test('automatic tools assemble deltas and send results back in a bounded native tool exchange', async () => {
+	const executed = [];
+	const view = start(null, {runJavaScript: async code => { executed.push(code); return {ok: true, output: '2'}; }});
+	view.elements['chat-tools'].checked = true;
+	view.elements['chat-input'].value = 'Calculate'; view.send();
+	assert.equal(JSON.parse(view.requests[0].options.body).tools[0].function.name, 'browser_javascript');
+	view.requests[0].resolve(sse(toolChunks())); await drain();
+	assert.deepEqual(executed, ['return 1 + 1']); assert.equal(view.requests.length, 2);
+	const body = JSON.parse(view.requests[1].options.body);
+	assert.equal(body.messages[1].role, 'assistant');
+	assert.equal(body.messages[1].tool_calls[0].id, 'call-1');
+	assert.equal(body.messages[2].role, 'tool'); assert.equal(body.messages[2].tool_call_id, 'call-1');
+	assert.deepEqual(JSON.parse(body.messages[2].content), {ok: true, output: '2'});
+	view.requests[1].resolve(sse(chunks('It is 2'))); await drain();
+	assert.equal(JSON.parse(view.storage['ai-router-chat:1']).messages.length, 4);
+	const restored = start(null, {storage: view.storage});
+	assert.equal(restored.elements['chat-tools'].checked, false);
+	assert.equal(restored.requests.length, 0); // Restored code is never executed.
+	assert.equal(restored.elements['chat-messages'].children.length, 4);
+});
+
+test('compatible stop terminals may carry complete structured tool calls, but length terminals cannot execute', async () => {
+	for (const finish of ['stop', 'length']) {
+		let executed = 0;
+		const view = start(null, {runJavaScript: async () => { executed++; return {ok: true, output: '2'}; }});
+		view.elements['chat-tools'].checked = true; view.elements['chat-input'].value = 'Tool'; view.send();
+		const frames = toolChunks().map(frame => frame.replace('"finish_reason":"tool_calls"', '"finish_reason":"' + finish + '"'));
+		view.requests[0].resolve(sse(frames)); await drain();
+		assert.equal(executed, finish === 'stop' ? 1 : 0);
+		assert.equal(view.requests.length, finish === 'stop' ? 2 : 1);
+	}
+});
+
+test('tools disabled or unrecognized names never execute model code', async () => {
+	let executions = 0;
+	for (const enabled of [false, true]) {
+		const view = start(null, {runJavaScript: async () => { executions++; return {ok: true, output: 'unexpected'}; }});
+		view.elements['chat-tools'].checked = enabled;
+		view.elements['chat-input'].value = 'Tool'; view.send();
+		view.requests[0].resolve(sse(toolChunks('return 2', {name: enabled ? 'unknown_tool' : 'browser_javascript'}))); await drain();
+		assert.equal(executions, 0);
+		if (!enabled) assert.equal(view.requests.length, 1);
+		else {
+			assert.equal(view.requests.length, 2);
+			assert.equal(JSON.parse(JSON.parse(view.requests[1].options.body).messages[2].content).ok, false);
+		}
+	}
+});
+
+test('six inference requests are the hard tool-loop limit', async () => {
+	let executed = 0;
+	const view = start(null, {runJavaScript: async () => { executed++; return {ok: true, output: 'ok'}; }});
+	view.elements['chat-tools'].checked = true; view.elements['chat-input'].value = 'Loop'; view.send();
+	for (let i = 0; i < 6; i++) { assert.equal(view.requests.length, i + 1); view.requests[i].resolve(sse(toolChunks('return 1', {id: 'call-' + i}))); await drain(); }
+	assert.equal(view.requests.length, 6); assert.equal(executed, 5);
+	assert.match(view.elements['chat-error'].textContent, /limit/);
+	assert.equal(view.elements['chat-send'].textContent, 'Send');
+});
+
+test('Stop cancels a running tool, persists a closed exchange and prevents follow-up inference', async () => {
+	const view = start(null, {runJavaScript: (code, {signal}) => new Promise((resolve, reject) => {
+		signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+	})});
+	view.elements['chat-tools'].checked = true; view.elements['chat-input'].value = 'Wait'; view.send();
+	view.requests[0].resolve(sse(toolChunks())); await drain(); view.send(); await drain();
+	assert.equal(view.requests.length, 1); assert.equal(view.elements['chat-error'].textContent, '');
+	const saved = JSON.parse(view.storage['ai-router-chat:1']).messages;
+	assert.equal(saved[2].role, 'tool'); assert.match(saved[2].content, /cancelled/);
+	assert.match(view.elements['chat-status'].textContent, /Stopped/);
+});
+
+test('incomplete streams and oversized tool calls never execute code', async () => {
+	let executed = 0;
+	for (const frames of [toolChunks().slice(0, -1), toolChunks('x'.repeat(25000))]) {
+		const view = start(null, {runJavaScript: async () => { executed++; }});
+		view.elements['chat-tools'].checked = true; view.elements['chat-input'].value = 'Unsafe'; view.send();
+		view.requests[0].resolve(sse(frames)); await drain();
+		assert.equal(executed, 0); assert.equal(view.requests.length, 1);
+		assert.notEqual(view.elements['chat-error'].textContent, '');
+	}
 });

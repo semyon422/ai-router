@@ -11,6 +11,9 @@ Sign in at `/login` with your router API key. `/` is the shared Home page;
 metadata; admins also get the full dashboard and everyone's requests. Roles are
 managed through MCP (`router_create_user` / `router_update_user`, `role: user|admin`).
 Roles do not bypass inference model grants. Conversation text stays in your browser.
+Chat includes New chat, an editable system prompt, reasoning controls, per-response
+inference details, and opt-in automatic JavaScript tools in a network-isolated
+browser sandbox. Tool execution is off after reload and bounded by time/step limits.
 The MCP management token remains separate.
 
 Dashboard URLs have no `/admin` prefix: `/overview`, `/channels`, `/usage`,

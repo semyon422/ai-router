@@ -276,7 +276,7 @@ function test.login_page_then_session_and_model_list(t)
 	t:assert(response.body:find("alice", 1, true))
 	t:assert(response.body:find('"userId":' .. stack.user.id, 1, true))
 	t:assert(response.body:find('"csrfToken":"' .. csrf .. '"', 1, true))
-	local textarea_attributes, textarea_content = response.body:match('<textarea([^>]*)>(.-)</textarea>')
+	local textarea_attributes, textarea_content = response.body:match('<textarea([^>]*id="chat%-input"[^>]*)>(.-)</textarea>')
 	t:assert(textarea_attributes)
 	t:eq(textarea_content, "")
 	t:eq(textarea_attributes:find("disabled", 1, true), nil)
@@ -586,7 +586,7 @@ function test.user_without_chat_models_gets_a_notice(t)
 	t:eq(response.status, 200)
 	t:assert(response.body:find("No Chat Completions models are available", 1, true))
 	t:assert(response.body:find("disabled", 1, true))
-	local textarea_attributes, textarea_content = response.body:match('<textarea([^>]*)>(.-)</textarea>')
+	local textarea_attributes, textarea_content = response.body:match('<textarea([^>]*id="chat%-input"[^>]*)>(.-)</textarea>')
 	t:assert(textarea_attributes:find("disabled", 1, true))
 	t:eq(textarea_content, "")
 	t:eq(native.complete_count + native.stream_count, 0)
@@ -603,6 +603,81 @@ function test.login_is_separate_from_chat_and_old_auth_urls_are_removed(t)
 		t:eq(request(t, stack, path, nil, {cookie = cookie}).status, 404)
 		t:eq(request(t, stack, path, {ignored = "1"}, {cookie = cookie}).status, 404)
 	end
+	stop(stack)
+end
+
+---@param t testing.T
+function test.chat_settings_and_model_metadata_are_safe_and_grant_scoped(t)
+	local stack = startStack()
+	local cookie = signIn(t, stack, TOKEN)
+	local response = request(t, stack, "/chat", nil, {cookie = cookie})
+	for _, id in ipairs({"chat-reset", "chat-system", "chat-reasoning", "chat-tools", "chat-status"}) do
+		t:assert(response.body:find('id="' .. id .. '"', 1, true), id)
+	end
+	local config = json.decode(assert(response.body:match("window%.routerChat = ([^\n]+);")))
+	t:eq(config.modelInfo.lite.kind, "zai")
+	t:eq(config.modelInfo.lite.channel, "zai-1")
+	t:eq(config.modelInfo.lite.upstreamModel, "glm-5.3")
+	t:eq(config.modelInfo["openai-1/gpt-6-luna"].kind, "openai_compat")
+	t:eq(config.modelInfo["openai-1/glm-5.3"], nil)
+	t:eq(response.body:find("https://api.z.ai", 1, true), nil)
+	t:eq(response.body:find(TOKEN, 1, true), nil)
+	t:eq(response.body:find(PASSWORD, 1, true), nil)
+	stop(stack)
+end
+
+---@param t testing.T
+function test.chat_tool_rounds_use_normal_inference_and_report_usage_individually(t)
+	local provider = fakeProvider()
+	function provider:completeStream(body, upstream_model, on_delta)
+		self.stream_count = self.stream_count + 1
+		t:eq(upstream_model, "glm-5.3")
+		t:eq(body.messages[1].role, "system")
+		t:eq(body.messages[1].content, "PRIVATE-SYSTEM-PROMPT")
+		t:eq(body.thinking.type, "enabled")
+		t:eq(body.tools[1]["function"].name, "browser_javascript")
+		if self.stream_count == 1 then
+			t:eq(#body.messages, 2)
+			local call = {id = "call-js", type = "function", ["function"] = {name = "browser_javascript", arguments = '{"code":"return 1+1"}'}}
+			on_delta({tool_calls = {{index = 0, id = call.id, type = call.type, ["function"] = call["function"]}}})
+			return {content = "", tool_calls = {call}, finish_reason = "tool_calls", usage = ok_message.usage}
+		end
+		t:eq(#body.messages, 4)
+		t:eq(body.messages[3].tool_calls[1].id, "call-js")
+		t:eq(body.messages[4].role, "tool")
+		t:eq(body.messages[4].tool_call_id, "call-js")
+		t:eq(json.decode(body.messages[4].content).output, "2")
+		on_delta({content = "2"})
+		return {content = "2", finish_reason = "stop", usage = ok_message.usage}
+	end
+	local stack = startStack({providers = {["zai-1"] = provider}})
+	local cookie, csrf = signIn(t, stack, TOKEN)
+	local body = {model = "lite", messages = {{role = "system", content = "PRIVATE-SYSTEM-PROMPT"}, {role = "user", content = "PRIVATE-PROMPT"}},
+		stream = true, stream_options = {include_usage = true}, thinking = {type = "enabled"},
+		tools = {{type = "function", ["function"] = {name = "browser_javascript",
+			parameters = {type = "object", properties = {code = {type = "string"}}, required = {"code"}}}}},
+	}
+	local response = request(t, stack, "/chat/completions", json.encode(body), {cookie = cookie, csrf = csrf})
+	t:eq(response.status, 200)
+	t:assert(response.body:find('"finish_reason":"tool_calls"', 1, true))
+	t:assert(response.body:find('"prompt_tokens":10', 1, true))
+	table.insert(body.messages, {role = "assistant", content = "", tool_calls = {{id = "call-js", type = "function", ["function"] = {name = "browser_javascript", arguments = '{"code":"return 1+1"}'}}}})
+	table.insert(body.messages, {role = "tool", tool_call_id = "call-js", content = '{"ok":true,"output":"2"}'})
+	response = request(t, stack, "/chat/completions", json.encode(body), {cookie = cookie, csrf = csrf})
+	t:eq(response.status, 200)
+	t:eq(provider.stream_count, 2)
+	local rows = stack.server.inference.request_logs_repo:list({}, os.time())
+	t:eq(#rows, 2)
+	for _, row in ipairs(rows) do
+		t:eq(row.user_id, stack.user.id)
+		t:eq(row.input_tokens, 10)
+		t:eq(row.output_tokens, 5)
+		t:eq(row.estimated, false)
+	end
+	t:eq(json.encode(rows):find("PRIVATE-", 1, true), nil)
+	local usage = stack.usage_repo:history(os.time())
+	t:eq(usage.rows[1].requests, 2)
+	t:eq(json.encode(usage):find("PRIVATE-", 1, true), nil)
 	stop(stack)
 end
 

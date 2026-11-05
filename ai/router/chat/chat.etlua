@@ -9,8 +9,21 @@
 <% end %>
 <% end %>
 </select>
+<button id="chat-reset" type="button">New chat</button>
 <% if #models == 0 then %><span class="muted">Ask your operator to grant you a model on a GLM or compatible channel.</span><% end %>
 </div>
+<details class="chat-settings">
+<summary>Settings · system prompt, reasoning, tools</summary>
+<label for="chat-system">System prompt</label>
+<textarea id="chat-system" rows="3" maxlength="100000" placeholder="Instructions sent before the conversation"></textarea>
+<div class="chat-settings-controls">
+<label>Reasoning <select id="chat-reasoning"><option value="default">Provider default</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select></label>
+<label><input id="chat-tools" type="checkbox"> Automatic JavaScript tool</label>
+</div>
+<p id="chat-reasoning-hint" class="muted"></p>
+<p class="muted">JavaScript runs in an isolated worker: no page DOM, credentials, storage, or network. Five seconds per call, four calls per step, six inference requests per turn. It is off after every page reload. Outputs are sent back to the model. There is no browser memory quota; only enable it for sessions you trust.</p>
+<p class="muted">New chat clears the conversation, not these settings. Editing the system prompt changes subsequent requests in this conversation.</p>
+</details>
 <div id="chat-messages" class="chat-messages">
 <% if #models == 0 then %>
 <div class="notice">No Chat Completions models are available to you yet. Models served only through the native Responses protocol cannot be used in this web chat.</div>
@@ -21,4 +34,5 @@
 <textarea id="chat-input" rows="2" placeholder="Message — Enter to send, Shift+Enter for a new line"<% if #models == 0 then %> disabled<% end %>></textarea>
 <button id="chat-send" type="button"<% if #models == 0 then %> disabled<% end %>>Send</button>
 </div>
-<p class="chat-hint">GLM and compatible models only. Conversations stay in this browser; the router stores the same request metadata as for API calls.</p>
+<p id="chat-status" class="chat-status muted" role="status"></p>
+<p class="chat-hint">Timing and tokens/s are browser-observed, including network/relay latency; tokens are provider-reported when available. GLM and compatible models only. Conversations and settings stay in this browser.</p>
