@@ -212,7 +212,7 @@ function AdminPages:overviewData()
 			windows = self.monitor.windows[row.id] or {}, poll = self.monitor.poll_status[row.id]})
 	end
 	---@type {[string]: boolean}
-	local public_models = self.server.router.state.public_models
+	local public_models = self.server.inference.router.state.public_models
 	local model_count = 0
 	for _ in pairs(public_models) do model_count = model_count + 1 end
 	return {channels = channels, enabled_count = enabled, model_count = model_count,
@@ -253,7 +253,7 @@ end
 ---@param session {csrf_token: string}
 function AdminPages:pageModels(res, session)
 	local names = {}
-	for name in pairs(self.server.router.state.public_models) do table.insert(names, name) end
+	for name in pairs(self.server.inference.router.state.public_models) do table.insert(names, name) end
 	table.sort(names)
 	self:render(res, session, "Models", self.templates.models({rows = self.models_repo:list(), public_models = names}))
 end
@@ -280,7 +280,7 @@ function AdminPages:pageRequests(res, session, query)
 	if query.outcome == "success" or query.outcome == "error" then filters.outcome = query.outcome end
 	local before = tonumber(query.before)
 	if before and before >= 1 and before < 2 ^ 53 and before % 1 == 0 then filters.before = before end
-	local repo = self.server.request_logs_repo
+	local repo = self.server.inference.request_logs_repo
 	local now = self.get_time()
 	local rows, next_before = repo:list(filters, now)
 	---@type {[string]: string}

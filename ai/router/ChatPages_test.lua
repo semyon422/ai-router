@@ -357,7 +357,7 @@ function test.completions_non_stream_and_stream_record_like_api(t)
 	t:eq(by_model["lite"].upstream_model, "glm-5.3")
 	t:eq(by_model["lite"].input_tokens, 10)
 
-	local logs = stack.server.request_logs_repo:list({}, os.time())
+	local logs = stack.server.inference.request_logs_repo:list({}, os.time())
 	t:eq(#logs, 2)
 	-- Newest first.
 	t:eq(logs[1].protocol, "chat_completions")
@@ -425,7 +425,7 @@ function test.browser_usage_option_reaches_upstream_and_request_log(t)
 				if event.usage ~= json.null and type(event.usage) == "table" then usage_frames = usage_frames + 1 end
 			end
 			t:eq(usage_frames, options ~= json.null and options.include_usage and 1 or 0)
-			local row = stack.server.request_logs_repo:list({}, os.time())[1]
+			local row = stack.server.inference.request_logs_repo:list({}, os.time())[1]
 			t:eq(row.input_tokens, 120)
 			t:eq(row.output_tokens, 30)
 			t:eq(row.cached_input_tokens, 80)

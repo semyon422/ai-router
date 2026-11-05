@@ -125,8 +125,8 @@ function ChatPages:chatModels(user)
 	---@type string[]
 	local models = {}
 	for _, model in ipairs(self.users_repo:getGrants(user.id)) do
-		if self.server.router.state.public_models[model] then
-			local candidate = self.server.router:resolve(model)
+		if self.server.inference.router.state.public_models[model] then
+			local candidate = self.server.inference.router:resolve(model)
 			if candidate and candidate.channel.kind ~= "openai" then
 				table.insert(models, model)
 			end
@@ -188,7 +188,7 @@ function ChatPages:completions(req, res, ip)
 	end
 	local metrics = RequestMetrics(self.server.get_time)
 	local started_at = metrics.started_at
-	local status = self.server:processInference(req, res, user, false, metrics, os.time(), started_at)
+	local status = self.server.inference:process(req, res, user, "chat_completions", metrics)
 	self.server:logRequest(ip, user, "POST", "/chat/completions", status, self.server.get_time() - started_at)
 end
 

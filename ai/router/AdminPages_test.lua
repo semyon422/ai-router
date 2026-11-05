@@ -226,7 +226,7 @@ end
 ---@param t testing.T
 function test.request_log_page_is_authenticated_filtered_paginated_and_escaped(t)
 	local stack = Stack()
-	local repo = stack.server.request_logs_repo
+	local repo = stack.server.inference.request_logs_repo
 	repo.page_size = 2
 	for index = 1, 4 do
 		repo:record({created_at = os.time(), user = "alice", model = "<script>private</script>",
@@ -273,7 +273,7 @@ end
 function test.requests_hide_redundant_upstream_names_and_combine_protocol_transport(t)
 	local stack = Stack()
 	for _, model in ipairs({"openai/model", "alias"}) do
-		stack.server.request_logs_repo:record({created_at = os.time(), user = "alice", model = model,
+		stack.server.inference.request_logs_repo:record({created_at = os.time(), user = "alice", model = model,
 			channel = "openai", upstream_model = "model", protocol = "responses", stream = true,
 			status = 200, duration_ms = 1000, input_tokens = 1, output_tokens = 1,
 			cached_input_tokens = 0, estimated = false})
@@ -295,7 +295,7 @@ end
 ---@param t testing.T
 function test.requests_strip_only_channel_prefix_and_keep_qualified_model_filters(t)
 	local stack = Stack()
-	stack.server.request_logs_repo:record({created_at = os.time(), user = "alice", model = "proxy/org/model",
+	stack.server.inference.request_logs_repo:record({created_at = os.time(), user = "alice", model = "proxy/org/model",
 		channel = "proxy", upstream_model = "org/model", protocol = "chat_completions", stream = false,
 		status = 200, duration_ms = 1000, input_tokens = 1, output_tokens = 1,
 		cached_input_tokens = 0, estimated = false})
@@ -305,7 +305,7 @@ function test.requests_strip_only_channel_prefix_and_keep_qualified_model_filter
 	t:assert(response.body:find('<td>proxy</td>\n<td><span title="proxy/org/model">org/model</span>', 1, true))
 	t:assert(response.body:find('value="proxy/org/model"', 1, true))
 	t:eq(response.body:find('<div class="muted">→ org/model</div>', 1, true), nil)
-	t:eq(stack.server.request_logs_repo:list({}, os.time())[1].model, "proxy/org/model")
+	t:eq(stack.server.inference.request_logs_repo:list({}, os.time())[1].model, "proxy/org/model")
 	stack:close()
 end
 
@@ -315,7 +315,7 @@ function test.channels_show_poll_failure_staleness_and_recovery(t)
 	stack.channels:create("openai", "openai", {models = {"gpt"}}, {}, 1000)
 	stack.server:reload(stack.channels:list(), {})
 	stack.admin.get_time = function() return 2000 end
-	local channel = stack.server.router.state.channels[1]
+	local channel = stack.server.inference.router.state.channels[1]
 	stack.monitor:pollFailed(channel, 1990, "cloudflare_challenge", 403)
 	local cookie = login(t, stack)
 	local response = request(t, stack, "GET", "/admin/channels", nil, cookie)
@@ -485,7 +485,7 @@ end
 ---@param t testing.T
 function test.request_filters_survive_pagination_latest_and_individual_removal(t)
 	local stack = Stack()
-	local repo = stack.server.request_logs_repo
+	local repo = stack.server.inference.request_logs_repo
 	repo.page_size = 2
 	local user, model, channel = 'alice & "ops"', "proxy/org/model", "proxy"
 	for _ = 1, 3 do
@@ -522,7 +522,7 @@ end
 ---@param t testing.T
 function test.request_columns_show_safe_metrics_unknowns_and_escaped_suggestions(t)
 	local stack = Stack()
-	local repo = stack.server.request_logs_repo
+	local repo = stack.server.inference.request_logs_repo
 	local now = os.time()
 	repo:record({created_at = now, user = '<script>UNTRUSTED</script>', model = 'alias"<tag>',
 		channel = "historical-deleted-channel", upstream_model = "org/model", protocol = "responses", stream = true,
@@ -565,7 +565,7 @@ function test.request_cached_input_shows_muted_percentage(t)
 	local cases = {{input = 0, cached = 0, estimated = false}, {input = 10, cached = 3, estimated = false},
 		{input = 10, cached = 10, estimated = false}, {input = 10, cached = 0, estimated = true}}
 	for _, counts in ipairs(cases) do
-		stack.server.request_logs_repo:record({created_at = os.time(), user = "alice", model = "m",
+		stack.server.inference.request_logs_repo:record({created_at = os.time(), user = "alice", model = "m",
 			channel = "c", upstream_model = "m", protocol = "responses", stream = false,
 			status = 200, duration_ms = 100, input_tokens = counts.input, cached_input_tokens = counts.cached,
 			output_tokens = 1, estimated = counts.estimated})

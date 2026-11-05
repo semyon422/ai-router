@@ -50,7 +50,7 @@ end
 ---@param t testing.T
 function test.users_mutations_and_key_revocation(t)
 	local stack = Stack()
-	local router, providers, fetchers = stack.server.router, stack.server.providers, stack.monitor.fetchers
+	local router, providers, fetchers = stack.server.inference.router, stack.server.inference.providers, stack.monitor.fetchers
 	local reloads = 0
 	local reload = stack.server.reload
 	function stack.server:reload(channels, models)
@@ -110,8 +110,8 @@ function test.users_mutations_and_key_revocation(t)
 		t:tdeq(stack.users:getGrants(id), {})
 	end)
 	t:eq(reloads, 0)
-	t:eq(stack.server.router, router)
-	t:eq(stack.server.providers, providers)
+	t:eq(stack.server.inference.router, router)
+	t:eq(stack.server.inference.providers, providers)
 	t:eq(stack.monitor.fetchers, fetchers)
 	stack:close()
 end
@@ -129,8 +129,8 @@ function test.catalog_validation_redaction_and_patching(t)
 		t:eq(created.channel.has_api_key, true)
 		call(client, "save_channel", {id = id, enabled = true, config = {model_redirects = { ["glm-5.3"] = "glm-real" }}})
 		t:eq(stack.channels:get(id).config.api_key, "SECRET-UPSTREAM")
-		t:eq(stack.server.router.state.public_models["zai-main/glm-5.3"], true)
-		t:eq(stack.server.router.state.channels[1].poll_interval, 80)
+		t:eq(stack.server.inference.router.state.public_models["zai-main/glm-5.3"], true)
+		t:eq(stack.server.inference.router.state.channels[1].poll_interval, 80)
 		local removed, removed_error = client:callTool("router_save_channel", {id = id, priority = 1})
 		t:eq(removed, nil)
 		t:eq(removed_error.code, -32602)
@@ -142,7 +142,7 @@ function test.catalog_validation_redaction_and_patching(t)
 		t:eq(stack.models:findByName("bad"), nil)
 		local alias = call(client, "save_model", {name = "lite", target = "zai-main/glm-5.3"}).model
 		t:eq(alias.target, "zai-main/glm-5.3")
-		t:eq(stack.server.router.state.alias_models.lite, "zai-main/glm-5.3")
+		t:eq(stack.server.inference.router.state.alias_models.lite, "zai-main/glm-5.3")
 		local rejected, schema_error = client:callTool("router_save_model", {name = "removed-chain", chain = {"glm-5.3"}})
 		t:eq(rejected, nil)
 		t:eq(schema_error.code, -32602)
@@ -177,10 +177,10 @@ function test.committed_catalog_reload_failure_and_retry(t)
 	run(t, stack, function(client)
 		call(client, "save_channel", {name = "original", kind = "openai_compat",
 			config = {base_url = "http://localhost/v1", models = {"old"}}})
-		local router, providers, fetchers, channels = stack.server.router, stack.server.providers,
+		local router, providers, fetchers, channels = stack.server.inference.router, stack.server.inference.providers,
 			stack.monitor.fetchers, stack.monitor.channels
-		local factory = stack.server.provider_factory
-		stack.server.provider_factory = function(row)
+		local factory = stack.server.inference.provider_factory
+		stack.server.inference.provider_factory = function(row)
 			if row.name == "saved" then error("SECRET-PROVIDER-EXCEPTION") end
 			return factory(row)
 		end
@@ -191,11 +191,11 @@ function test.committed_catalog_reload_failure_and_retry(t)
 		t:assert(result.structuredContent.channel.id > 0)
 		t:eq(json.encode(result):find("SECRET-PROVIDER-EXCEPTION", 1, true), nil)
 		t:eq(#stack.channels:list(), 2)
-		t:eq(stack.server.router, router)
-		t:eq(stack.server.providers, providers)
+		t:eq(stack.server.inference.router, router)
+		t:eq(stack.server.inference.providers, providers)
 		t:eq(stack.monitor.fetchers, fetchers)
 		t:eq(stack.monitor.channels, channels)
-		t:eq(stack.server.router.state.public_models.new, nil)
+		t:eq(stack.server.inference.router.state.public_models.new, nil)
 		t:eq(call(client, "status").catalog_reload_pending, true)
 		t:eq(#call(client, "list_channels").channels, 2)
 		local retry = assert(client:callTool("router_reload_catalog"))
@@ -205,11 +205,11 @@ function test.committed_catalog_reload_failure_and_retry(t)
 		local user = call(client, "create_user", {name = "still-usable", models = {"old"}})
 		t:eq(user.operation.reload, "not_required")
 		t:eq(call(client, "status").catalog_reload_pending, true)
-		stack.server.provider_factory = factory
+		stack.server.inference.provider_factory = factory
 		local applied = call(client, "reload_catalog")
 		t:tdeq(applied.operation, {persistence = "not_attempted", reload = "applied"})
 		t:eq(call(client, "status").catalog_reload_pending, false)
-		t:eq(stack.server.router.state.public_models["saved/new"], true)
+		t:eq(stack.server.inference.router.state.public_models["saved/new"], true)
 		t:eq(#stack.channels:list(), 2)
 	end)
 	stack:close()
@@ -325,7 +325,7 @@ function test.channel_probe_uses_one_native_call_and_only_returns_metadata(t)
 	local stack = Stack()
 	local calls = 0
 	local last_probe_body
-	stack.server.provider_factory = function(row)
+	stack.server.inference.provider_factory = function(row)
 		if row.kind == "openai" then
 			return {createResponse = function(_, body, upstream_model, session_id, callback)
 				calls = calls + 1
@@ -387,7 +387,7 @@ function test.channel_probe_uses_one_native_call_and_only_returns_metadata(t)
 	end)
 	t:eq(calls, 3)
 	t:eq(#stack.usage_repo:history(os.time()).rows, 0)
-	t:eq(#stack.server.request_logs_repo:list({}, os.time()), 0)
+	t:eq(#stack.server.inference.request_logs_repo:list({}, os.time()), 0)
 	t:eq(next(stack.management.active_probes), nil)
 	stack:close()
 end
@@ -397,7 +397,7 @@ function test.channel_probe_validates_selection_and_sanitizes_failures_without_r
 	local stack = Stack()
 	local calls = 0
 	local mode = "timeout"
-	stack.server.provider_factory = function()
+	stack.server.inference.provider_factory = function()
 		return {complete = function()
 			calls = calls + 1
 			if mode == "exception" then error("PRIVATE-EXCEPTION") end
@@ -450,7 +450,7 @@ end
 function test.channel_probe_handles_native_failure_and_blocks_pending_login(t)
 	local stack = Stack()
 	local calls = 0
-	stack.server.provider_factory = function()
+	stack.server.inference.provider_factory = function()
 		return {createResponse = function()
 			calls = calls + 1
 			return {status = "failed", error = {code = "rate_limit_exceeded", message = "PRIVATE-ERROR"}}
@@ -467,7 +467,7 @@ function test.channel_probe_handles_native_failure_and_blocks_pending_login(t)
 		stack.management.openai_login = {isLoggingIn = function() return true end}
 		t:eq(assert(client:callTool("router_test_channel", {id = id, model = "model"})).isError, true)
 		stack.management.openai_login = nil
-		stack.server.providers[id] = nil
+		stack.server.inference.providers[id] = nil
 		t:eq(assert(client:callTool("router_test_channel", {id = id, model = "model"})).isError, true)
 		t:eq(calls, 1)
 	end)
@@ -504,7 +504,7 @@ function test.status_exposes_safe_usage_poll_errors_with_schema_validation(t)
 	run(t, stack, function(client)
 		local saved = call(client, "save_channel", {name = "openai", kind = "openai", config = {models = {"gpt"}}})
 		local id = saved.channel.id
-		stack.monitor:setChannels(stack.server.router.state.channels, {[id] = function()
+		stack.monitor:setChannels(stack.server.inference.router.state.channels, {[id] = function()
 			return nil, "SECRET body and credentials", {code = "cloudflare_challenge", status = 403}
 		end})
 		stack.monitor:refresh(id, 1234)

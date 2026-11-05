@@ -237,7 +237,7 @@ end
 function Management:listModels()
 	---@type string[]
 	local names = json.array({})
-	for name in pairs(self.server.router.state.public_models) do table.insert(names, name) end
+	for name in pairs(self.server.inference.router.state.public_models) do table.insert(names, name) end
 	table.sort(names)
 	return {public_models = names, aliases = json.array(self.models_repo:list())}
 end
@@ -433,9 +433,9 @@ function Management:testChannel(args)
 	end
 	check(not self.active_probes[row.id], "A test is already running for this channel.")
 	local public_model = row.name .. "/" .. args.model
-	local candidate = self.server.router:resolve(public_model)
+	local candidate = self.server.inference.router:resolve(public_model)
 	check(candidate and candidate.channel.id == row.id, "Select a configured model on this channel.")
-	local provider = self.server.providers[row.id]
+	local provider = self.server.inference.providers[row.id]
 	local native = row.kind == "openai"
 	check(provider and (native and provider.createResponse or not native and provider.complete), "Channel provider is unavailable.")
 	local metrics = RequestMetrics(self.server.get_time)

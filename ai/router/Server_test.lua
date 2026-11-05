@@ -370,8 +370,8 @@ function test.quota_snapshots_do_not_change_selected_channel(t)
 	local serving = fakeProvider({message = ok_message})
 	local stack = startStack({providers = {["zai-1"] = depleted, ["openai-1"] = serving}})
 	-- fresh upstream snapshot: zai-1 is 95% full
-	stack.monitor:setChannels(stack.server.router.state.channels, {})
-	stack.monitor:saveWindow(stack.server.router.state.channels[1], "five_hour",
+	stack.monitor:setChannels(stack.server.inference.router.state.channels, {})
+	stack.monitor:saveWindow(stack.server.inference.router.state.channels[1], "five_hour",
 		{used_percent = 95}, "upstream", os.time())
 	local response = request(t, stack, "/v1/chat/completions", {
 		model = "lite",
@@ -495,7 +495,7 @@ function test.streaming_errors_before_and_after_output_never_switch(t)
 	local errors = 0
 	for _, item in ipairs(rows) do errors = errors + item.errors end
 	t:eq(errors, 2)
-	t:eq(next(stack.server.active_requests), nil)
+	t:eq(next(stack.server.inference.active_requests), nil)
 	stack.server:stop()
 	stack.storage:close()
 end
@@ -508,13 +508,13 @@ function test.exceptions_release_slots_and_do_not_leak_details(t)
 	local stack = startStack({providers = {["zai-1"] = broken, ["openai-1"] = fallback}})
 	local body = {model = "lite", messages = {{role = "user", content = "hi"}}}
 	t:eq(request(t, stack, "/v1/chat/completions", body, TOKEN).status, 502)
-	local complete = stack.server.complete
-	stack.server.complete = function() error("SECRET-HANDLER") end
+	local complete = stack.server.inference.complete
+	stack.server.inference.complete = function() error("SECRET-HANDLER") end
 	local response = request(t, stack, "/v1/chat/completions", body, TOKEN)
 	t:eq(response.status, 500)
 	t:eq(response.body:find("SECRET", 1, true), nil)
-	t:eq(next(stack.server.active_requests), nil)
-	stack.server.complete = complete
+	t:eq(next(stack.server.inference.active_requests), nil)
+	stack.server.inference.complete = complete
 	t:eq(request(t, stack, "/v1/chat/completions", body, TOKEN).status, 502)
 	broken.completeStream = function(_, _, _, callback)
 		callback({content = "partial"})
@@ -526,7 +526,7 @@ function test.exceptions_release_slots_and_do_not_leak_details(t)
 	t:eq(parseSse(response.body)[3].error.code, "upstream_error")
 	t:eq(fallback.stream_count, 0)
 	t:eq(response.body:find("SECRET", 1, true), nil)
-	t:eq(next(stack.server.active_requests), nil)
+	t:eq(next(stack.server.inference.active_requests), nil)
 	stack.server:stop()
 	stack.storage:close()
 end
@@ -586,7 +586,7 @@ function test.downstream_write_failures_never_fail_over(t)
 	-- Fail the role write, a content write, or the terminal write.
 	for _, fail_after in ipairs({0, 1, 3}) do
 		local res = setmetatable({headers = Headers(), writes = 0, fail_after = fail_after}, {__index = RouterResponse})
-		local status, result = stack.server:complete(res, {model = "lite", stream = true}, stack.user)
+		local status, result = stack.server.inference:complete(res, {model = "lite", stream = true}, stack.user)
 		t:eq(status, 499)
 		t:eq(result.downstream_closed, true)
 		t:eq(result.channel, "zai-1")
@@ -604,10 +604,10 @@ function test.user_limit_overrides_and_key_rotation_share_counters(t)
 	t:eq(request(t, stack, "/v1/chat/completions", body, TOKEN).status, 200)
 	local key = stack.users:regenerateKey(stack.user.id, os.time())
 	t:eq(request(t, stack, "/v1/chat/completions", body, key).status, 429)
-	stack.server.request_windows = {}
-	t:assert(stack.server:acquireRequest(tostring(stack.user.id), 1))
+	stack.server.inference.request_windows = {}
+	t:assert(stack.server.inference:acquireRequest(tostring(stack.user.id), 1))
 	t:eq(request(t, stack, "/v1/chat/completions", body, key).status, 429)
-	stack.server:releaseRequest(tostring(stack.user.id))
+	stack.server.inference:releaseRequest(tostring(stack.user.id))
 	stack.server:stop()
 	stack.storage:close()
 end
@@ -653,7 +653,7 @@ function test.real_upstream_auth_failure_and_stream_timeout(t)
 		stack.server:reload(stack.channels:list(), stack.models:list())
 		local response = request(t, stack, "/v1/chat/completions", {model = "lite", messages = {}, stream = true}, TOKEN)
 		t:eq(response.status, mode == "auth" and 401 or 502)
-		t:eq(next(stack.server.active_requests), nil)
+		t:eq(next(stack.server.inference.active_requests), nil)
 	end
 	t:eq(closed, 2)
 	t:eq(fallback.stream_count, 0)
@@ -676,7 +676,7 @@ function test.pre_output_failures_call_only_selected_channel_once(t)
 			t:eq(first.complete_count + first.stream_count, 1)
 			t:eq(second.complete_count + second.stream_count, 0)
 			t:eq(refreshed, code == 429 and 1 or 0)
-			t:eq(next(stack.server.active_requests), nil)
+			t:eq(next(stack.server.inference.active_requests), nil)
 			stack.server:stop()
 			stack.storage:close()
 		end
@@ -725,7 +725,7 @@ function test.real_downstream_disconnect_closes_upstream_and_releases_slot(t)
 			assert(client:sendBody(json.encode({model = "lite", messages = {}, stream = true})))
 			assert(client:receiveHeaders())
 			client:cancel("test disconnect")
-			while next(stack.server.active_requests) do stack.scheduler:sleep(0.01) end
+			while next(stack.server.inference.active_requests) do stack.scheduler:sleep(0.01) end
 		end)
 		if not ok then failure = err end
 	end))
@@ -735,7 +735,7 @@ function test.real_downstream_disconnect_closes_upstream_and_releases_slot(t)
 	t:eq(closed, 1)
 	t:eq(fallback.stream_count, 0)
 	t:assert(log:find("status=499", 1, true))
-	local rows = stack.server.request_logs_repo:list({}, os.time())
+	local rows = stack.server.inference.request_logs_repo:list({}, os.time())
 	t:eq(rows[1].status, 499)
 	t:eq(rows[1].channel, "zai-1")
 	t:eq(rows[1].error_code, "client_disconnected")
@@ -859,7 +859,7 @@ function test.native_endpoint_validation_grants_and_protocol_isolation(t)
 	t:eq(request(t, stack, "/v1/responses", {model = "lite", input = "hi"}, TOKEN).status, 404)
 	t:eq(request(t, stack, "/v1/responses", {model = "gpt-6-luna", input = "hi"}, "wrong-key").status, 401)
 	t:eq(native.complete_count, 0)
-	t:eq(next(stack.server.active_requests), nil)
+	t:eq(next(stack.server.inference.active_requests), nil)
 	stack.server:stop()
 	stack.storage:close()
 end
@@ -922,7 +922,7 @@ function test.native_auth_errors_quota_snapshots_and_downstream_failures(t)
 	t:eq(second.complete_count, 0)
 	stack.providers_by_name["native-1"] = second
 	stack.server:reload(stack.channels:list(), stack.models:list())
-	for _, channel in ipairs(stack.server.router.state.channels) do
+	for _, channel in ipairs(stack.server.inference.router.state.channels) do
 		if channel.id == 3 then
 			stack.monitor:saveWindow(channel, "five_hour", {used_percent = 95}, "upstream", os.time())
 		end
@@ -932,7 +932,7 @@ function test.native_auth_errors_quota_snapshots_and_downstream_failures(t)
 	for _, fail_after in ipairs({0, 1}) do
 		local res = setmetatable({headers = Headers(), writes = 0, fail_after = fail_after}, {__index = RouterResponse})
 		body.stream = true
-		local status, result = stack.server:complete(res, body, stack.user, "responses")
+		local status, result = stack.server.inference:complete(res, body, stack.user, "responses")
 		t:eq(status, 499)
 		t:eq(result.downstream_closed, true)
 	end
@@ -987,7 +987,7 @@ function test.protocols_share_user_limits_and_native_exceptions_are_sanitized(t)
 	local response = request(t, stack, "/v1/responses", {model = "lite", input = "hi"}, TOKEN)
 	t:eq(response.status, 502)
 	t:eq(response.body:find("SECRET", 1, true), nil)
-	t:eq(next(stack.server.active_requests), nil)
+	t:eq(next(stack.server.inference.active_requests), nil)
 	stack.server:stop()
 	stack.storage:close()
 end
@@ -1029,7 +1029,7 @@ function test.request_logs_capture_both_protocols_and_local_rejections(t)
 	local native = fakeProvider({response = native_result, events = {{type = "response.completed", response = native_result}}})
 	addNative(stack, "native-log", native)
 	t:eq(request(t, stack, "/v1/responses", {model = "lite", input = "PRIVATE-PROMPT", stream = true}, TOKEN).status, 200)
-	local rows = stack.server.request_logs_repo:list({}, os.time())
+	local rows = stack.server.inference.request_logs_repo:list({}, os.time())
 	t:eq(#rows, 3)
 	t:eq(rows[1].protocol, "responses")
 	t:eq(rows[1].channel, "native-log")
@@ -1048,7 +1048,7 @@ function test.request_logs_capture_both_protocols_and_local_rejections(t)
 	t:eq(request(t, stack, "/v1/responses", {model = "lite", input = "hi", store = true}, TOKEN).status, 400)
 	stack.users:update(stack.user.id, {max_rpm = 1}, os.time())
 	t:eq(request(t, stack, "/v1/responses", {model = "lite", input = "hi"}, TOKEN).status, 429)
-	rows = stack.server.request_logs_repo:list({}, os.time())
+	rows = stack.server.inference.request_logs_repo:list({}, os.time())
 	t:eq(#rows, 5)
 	t:eq(rows[1].status, 429)
 	t:eq(rows[1].error_code, "rate_limit")
@@ -1058,7 +1058,7 @@ function test.request_logs_capture_both_protocols_and_local_rejections(t)
 	t:eq(rows[2].estimated, true)
 	request(t, stack, "/v1/models", nil, TOKEN)
 	request(t, stack, "/v1/responses", {model = "lite", input = "hi"}, "wrong-key")
-	t:eq(#stack.server.request_logs_repo:list({}, os.time()), 5)
+	t:eq(#stack.server.inference.request_logs_repo:list({}, os.time()), 5)
 	stack.server:stop()
 	stack.storage:close()
 end
@@ -1073,7 +1073,7 @@ function test.request_logs_preserve_upstream_and_streaming_outcomes(t)
 	stack.providers_by_name["zai-1"] = partial
 	stack.server:reload(stack.channels:list(), stack.models:list())
 	t:eq(request(t, stack, "/v1/chat/completions", {model = "lite", messages = {}, stream = true}, TOKEN).status, 200)
-	local rows = stack.server.request_logs_repo:list({}, os.time())
+	local rows = stack.server.inference.request_logs_repo:list({}, os.time())
 	t:eq(rows[1].status, 502)
 	t:eq(rows[1].channel, "zai-1")
 	t:eq(rows[2].status, 429)
@@ -1082,12 +1082,12 @@ function test.request_logs_preserve_upstream_and_streaming_outcomes(t)
 	t:eq(json.encode(rows):find("PRIVATE-ERROR", 1, true), nil)
 	local log_message
 	stack.server.logger = function(line) log_message = line end
-	stack.server.request_logs_repo.record = function() error("PRIVATE-SQL-ERROR") end
+	stack.server.inference.request_logs_repo.record = function() error("PRIVATE-SQL-ERROR") end
 	stack.providers_by_name["zai-1"] = fakeProvider({message = ok_message})
 	stack.server:reload(stack.channels:list(), stack.models:list())
 	t:eq(request(t, stack, "/v1/chat/completions", {model = "lite", messages = {}}, TOKEN).status, 200)
 	t:eq(log_message:find("PRIVATE", 1, true), nil)
-	t:eq(next(stack.server.active_requests), nil)
+	t:eq(next(stack.server.inference.active_requests), nil)
 	stack.server:stop()
 	stack.storage:close()
 end
@@ -1109,7 +1109,7 @@ function test.stream_metrics_measure_output_not_role_or_lifecycle_events(t)
 	local stack = startStack({providers = {["zai-1"] = provider}})
 	stack.server.get_time = function() return now end
 	t:eq(request(t, stack, "/v1/chat/completions", {model = "lite", messages = {}, stream = true}, TOKEN).status, 200)
-	local rows = stack.server.request_logs_repo:list({}, os.time())
+	local rows = stack.server.inference.request_logs_repo:list({}, os.time())
 	t:eq(rows[1].ttft_ms, 2000)
 	t:eq(rows[1].generation_ms, 4000)
 	t:eq(rows[1].output_tps, 1.25)
@@ -1129,7 +1129,7 @@ function test.stream_metrics_measure_output_not_role_or_lifecycle_events(t)
 	addNative(stack, "timed-native", native)
 	now = 110
 	t:eq(request(t, stack, "/v1/responses", {model = "lite", input = "hi", stream = true}, TOKEN).status, 200)
-	rows = stack.server.request_logs_repo:list({}, os.time())
+	rows = stack.server.inference.request_logs_repo:list({}, os.time())
 	t:eq(rows[1].ttft_ms, 3000)
 	t:eq(rows[1].generation_ms, 2000)
 	t:eq(rows[1].output_tps, 2.5)
@@ -1141,20 +1141,20 @@ end
 function test.request_error_codes_cover_timeout_auth_local_and_failed_responses(t)
 	local stack = startStack({providers = {["zai-1"] = fakeProvider({err = "PRIVATE timeout"})}})
 	t:eq(request(t, stack, "/v1/chat/completions", {model = "lite", messages = {}}, TOKEN).status, 502)
-	t:eq(stack.server.request_logs_repo:list({}, os.time())[1].error_code, "timeout")
+	t:eq(stack.server.inference.request_logs_repo:list({}, os.time())[1].error_code, "timeout")
 	stack.providers_by_name["zai-1"] = fakeProvider({provider_error = {status = 401, message = "PRIVATE", code = "PRIVATE"}})
 	stack.server:reload(stack.channels:list(), stack.models:list())
 	t:eq(request(t, stack, "/v1/chat/completions", {model = "lite", messages = {}}, TOKEN).status, 401)
-	t:eq(stack.server.request_logs_repo:list({}, os.time())[1].error_code, "auth")
+	t:eq(stack.server.inference.request_logs_repo:list({}, os.time())[1].error_code, "auth")
 	t:eq(request(t, stack, "/v1/chat/completions", {model = "missing", messages = {}}, TOKEN).status, 404)
-	t:eq(stack.server.request_logs_repo:list({}, os.time())[1].error_code, "model_not_found")
+	t:eq(stack.server.inference.request_logs_repo:list({}, os.time())[1].error_code, "model_not_found")
 	t:eq(request(t, stack, "/v1/responses", {model = "lite", input = "hi"}, TOKEN).status, 400)
-	t:eq(stack.server.request_logs_repo:list({}, os.time())[1].error_code, "unsupported_protocol")
+	t:eq(stack.server.inference.request_logs_repo:list({}, os.time())[1].error_code, "unsupported_protocol")
 	local failed = {id = "resp_failed", status = "failed", error = {code = "rate_limit_exceeded", message = "PRIVATE"}}
 	addNative(stack, "failed-native", fakeProvider({response = failed}))
 	stack.monitor.refresh = function() end
 	t:eq(request(t, stack, "/v1/responses", {model = "lite", input = "hi"}, TOKEN).status, 200)
-	local rows = stack.server.request_logs_repo:list({}, os.time())
+	local rows = stack.server.inference.request_logs_repo:list({}, os.time())
 	t:eq(rows[1].status, 502)
 	t:eq(rows[1].error_code, "rate_limit")
 	t:eq(rows[1].ttft_ms, nil)

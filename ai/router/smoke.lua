@@ -176,7 +176,7 @@ local mcp_thread = coext.detach(coroutine.create(function()
 		assert(diagnostic.structuredContent.probe.response == nil)
 	end
 	assert(#usage_repo:history(os.time()).rows == 0)
-	assert(#server.request_logs_repo:list({}, os.time()) == 0)
+	assert(#server.inference.request_logs_repo:list({}, os.time()) == 0)
 	local created = assert(client:callTool("router_create_user", {name = "smoke-user", models = {"local-llama/llama-70b", "native-openai/gpt-native"}}))
 	assert(not created.isError, created.content[1].text)
 	user_key = created.structuredContent.api_key
