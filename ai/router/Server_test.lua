@@ -1167,4 +1167,46 @@ function test.request_error_codes_cover_timeout_auth_local_and_failed_responses(
 	stack.storage:close()
 end
 
+function test.full_payload_storage_matches_client_json_and_sse_for_both_protocols(t)
+	local native = fakeProvider({response = native_result, events = {
+		{type = "response.created", response = {id = "resp_capture"}},
+		{type = "response.function_call_arguments.delta", delta = '{"code":"1+1"}'},
+		{type = "response.completed", response = native_result},
+	}})
+	local chat = fakeProvider({message = ok_message, deltas = {{reasoning_content = "reason"}, {content = "hello"}}})
+	local stack = startStack({providers = {["zai-1"] = chat}})
+	addNative(stack, "native-capture", native)
+	local repo = stack.server.inference.request_logs_repo
+	for _, protocol in ipairs({"chat_completions", "responses"}) do
+		for _, stream in ipairs({false, true}) do
+			local is_native = protocol == "responses"
+			stack.models:update(1, {target = is_native and "native-capture/glm-5.3" or "zai-1/glm-5.3"}, os.time())
+			stack.server:reload(stack.channels:list(), stack.models:list())
+			local body = {model = "lite", stream = stream}
+			if is_native then body.input = "PRIVATE-INPUT" body.instructions = "PRIVATE-SYSTEM"
+			else body.messages = {{role = "system", content = "PRIVATE-SYSTEM"}, {role = "user", content = "PRIVATE-INPUT"}} end
+			local path = is_native and "/v1/responses" or "/v1/chat/completions"
+			local response = request(t, stack, path, body, TOKEN, {Cookie = "PRIVATE-COOKIE"})
+			t:eq(response.status, 200)
+			local row = repo:list({user_id = stack.user.id}, os.time())[1]
+			t:eq(row.has_details, true)
+			t:tdeq(json.decode(repo:getBody(row.id, "request", stack.user.id)), json.decode(json.encode(body)))
+			t:eq(repo:getBody(row.id, "response", stack.user.id), response.body)
+			local details = repo:getDetails(row.id, stack.user.id)
+			t:eq(details.request_path, path)
+			t:eq(details.response_complete, true)
+			t:eq(details.http_status, 200)
+			t:eq(details.response_content_type, stream and "text/event-stream" or "application/json")
+			t:eq(repo:getBody(row.id, "request", stack.user.id):find(TOKEN, 1, true), nil)
+			t:eq(repo:getBody(row.id, "request", stack.user.id):find("PRIVATE-COOKIE", 1, true), nil)
+			if is_native and stream then
+				t:assert(response.body:find("event: response.function_call_arguments.delta", 1, true))
+				t:eq(response.body:find("[DONE]", 1, true), nil)
+			end
+		end
+	end
+	stack.server:stop()
+	stack.storage:close()
+end
+
 return test

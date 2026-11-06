@@ -7,7 +7,7 @@ local test = {}
 -- Exercise the service without a listener, SQLite or browser. HTTP integration
 -- and real transport cancellation remain covered by Server_test/ChatPages_test.
 local function fixture()
-	local state = {now = 100, calls = 0, aggregates = {}, rows = {}, logs = {}}
+	local state = {now = 100, calls = 0, aggregates = {}, rows = {}, details = {}, logs = {}}
 	local service
 	service = InferenceService({
 		users_repo = {models = {}, getGrants = function() return {"local/mock"} end},
@@ -42,6 +42,11 @@ local function fixture()
 		assert(next(service.active_requests) == nil, "slot must be released before persistence")
 		table.insert(state.rows, row)
 		if state.fail_log then error("PRIVATE-LOG") end
+		return {id = #state.rows}
+	end, rotateDetails = function() end, recordDetails = function(_, id, owner, details)
+		assert(next(service.active_requests) == nil, "slot must be released before payload persistence")
+		state.details[#state.details + 1] = {id = id, owner = owner, data = details}
+		if state.fail_detail then error("PRIVATE-PAYLOAD-WRITE") end
 	end}
 	service:reload({{id = 1, name = "local", kind = "openai_compat", enabled = true,
 		config = {base_url = "http://unused.test/v1", models = {"mock"}}, limits = {}}}, {})
@@ -129,6 +134,7 @@ function test.read_and_response_exceptions_always_finalize(t)
 		t:eq(state.rows[1].error_code, "internal_error")
 		t:eq(json.encode(res.chunks):find("PRIVATE", 1, true), nil)
 		t:eq(#state.aggregates, fail == "read" and 0 or 1)
+		t:eq(state.details[1].data.request_state, fail == "read" and "partial" or "complete")
 	end
 end
 
@@ -172,6 +178,55 @@ function test.malformed_json_and_provider_errors_keep_existing_outcomes(t)
 		t:eq(state.rows[1].error_code, fail == "json" and "invalid_request" or "upstream_error")
 		t:eq(table.concat(res.chunks):find("PRIVATE", 1, true), nil)
 	end
+end
+
+function test.full_client_payloads_are_independent_of_metadata_and_write_failures(t)
+	for _, stream in ipairs({false, true}) do
+		local service, state, user = fixture()
+		local req, res = request(stream)
+		req.uri = "/chat/completions?ignored=PRIVATE-QUERY"
+		req.headers:set("Authorization", "Bearer PRIVATE-KEY")
+		req.headers:set("Cookie", "PRIVATE-COOKIE")
+		local raw = req:receive()
+		t:eq(service:process(req, res, user, "chat_completions"), 200)
+		t:eq(#state.details, 1)
+		local saved = state.details[1]
+		t:eq(saved.owner, user.id)
+		t:eq(saved.data.request_body, raw)
+		t:eq(saved.data.response_body, table.concat(res.chunks))
+		t:eq(saved.data.response_complete, true)
+		t:eq(saved.data.request_path, "/chat/completions")
+		t:eq(saved.data.request_state, "complete")
+		t:eq(json.encode(saved):find("PRIVATE-KEY", 1, true), nil)
+		t:eq(json.encode(saved):find("PRIVATE-COOKIE", 1, true), nil)
+		t:eq(json.encode(saved):find("PRIVATE-QUERY", 1, true), nil)
+		service:finalize(user, state.context)
+		t:eq(#state.details, 1)
+	end
+	local service, state, user = fixture()
+	state.fail_detail = true
+	local req, res = request(false)
+	t:eq(service:process(req, res, user, "chat_completions"), 200)
+	t:eq(#state.aggregates, 1)
+	t:eq(#state.rows, 1)
+	t:tdeq(state.logs, {"request detail write failed"})
+	t:eq(next(service.active_requests), nil)
+end
+
+function test.invalid_and_unread_bodies_keep_honest_capture_states(t)
+	local service, state, user = fixture()
+	local req, res = request(false)
+	req.receive = function() return "{bad-json" end
+	t:eq(service:process(req, res, user, "chat_completions"), 400)
+	t:eq(state.details[1].data.request_body, "{bad-json")
+	t:eq(state.details[1].data.response_body, table.concat(res.chunks))
+	t:eq(state.details[1].data.request_state, "complete")
+	req, res = request(false)
+	req.headers:set("Content-Length", service.max_body_size + 1)
+	req.receive = function() error("must not read rejected body") end
+	t:eq(service:process(req, res, user, "chat_completions"), 413)
+	t:eq(state.details[2].data.request_state, "not_read")
+	t:eq(state.details[2].data.request_body, "")
 end
 
 return test

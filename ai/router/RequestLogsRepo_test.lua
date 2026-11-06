@@ -165,4 +165,124 @@ function test.owner_scope_applies_to_rows_and_filter_suggestions(t)
 	storage:close()
 end
 
+local function details(text)
+	text = text or '{"messages":[{"role":"user","content":"private"}]}'
+	return {request_path = "/v1/chat/completions", request_body = text, response_body = "data: [DONE]\n\n",
+		request_bytes = #text, response_bytes = 14, request_state = "complete", request_truncated = false,
+		response_truncated = false, response_complete = true, capture_failed = false,
+		http_status = 200, response_content_type = "text/event-stream"}
+end
+
+function test.ten_payload_pairs_are_retained_per_stable_owner_not_name(t)
+	local repo, storage = open()
+	local ids = {}
+	for i = 1, 12 do
+		for owner = 1, 2 do
+			local entry = row(1000 + i)
+			entry.user_id, entry.user = owner, "same-name"
+			local saved = repo:record(entry)
+			repo:recordDetails(saved.id, owner, details("owner" .. owner .. "-" .. i), entry.created_at)
+			if owner == 1 then ids[i] = saved.id end
+		end
+	end
+	t:eq(#storage.db:query("SELECT request_id FROM router_request_details"), 20)
+	t:eq(repo:getDetails(ids[1], 1), nil)
+	t:eq(repo:getDetails(ids[2], 1), nil)
+	t:eq(repo:getBody(ids[3], "request", 1), "owner1-3")
+	t:eq(repo:getBody(ids[3], "request", 2), nil)
+	t:eq(repo:getDetails(ids[3], 2), nil)
+	t:eq(repo:get(ids[3], 2, 1012), nil)
+	t:eq(repo:getDetails(ids[3]).request_truncated, false)
+	t:eq(repo:get(ids[1], 1, 1012).has_details, false)
+	t:eq(repo:get(ids[3], 1, 1012).has_details, true)
+	t:has_error(function() repo:getBody(ids[3], "request", "1 OR 1=1") end)
+	t:has_error(function() repo:getBody(ids[3], "request_body FROM router_request_logs") end)
+	storage:close()
+end
+
+function test.detailed_metadata_is_pinned_past_age_and_global_count_until_eviction(t)
+	local repo, storage = open()
+	repo.max_rows, repo.retention_seconds, repo.details_per_user = 2, 10, 1
+	local saved = repo:record(row(1000))
+	repo:recordDetails(saved.id, 1, details(), 1000)
+	for i = 1, 5 do
+		local other = row(2000 + i)
+		other.user_id, other.user = 2, "bob"
+		repo:record(other)
+	end
+	t:eq(#storage.db:query("SELECT id FROM router_request_logs"), 3)
+	t:eq(#repo:list({user_id = 1}, 5000), 1)
+	t:tdeq(repo:filterOptions(5000, 1).user, {"alice"})
+	t:assert(repo:get(saved.id, 1, 5000))
+	local newer = repo:record(row(5000))
+	repo:recordDetails(newer.id, 1, details("new"), 5000)
+	t:eq(repo:getDetails(saved.id, 1), nil)
+	t:eq(repo:get(saved.id, 1, 5000), nil)
+	t:eq(#storage.db:query("SELECT id FROM router_request_logs WHERE id = " .. saved.id), 0)
+	t:eq(repo:getBody(newer.id, "request", 1), "new")
+	storage:close()
+end
+
+function test.details_preserve_binary_bytes_but_only_return_bounded_previews(t)
+	local repo, storage = open()
+	repo.preview_size = 4
+	local saved = repo:record(row(1000))
+	local raw = "abc\0<script>\208\175</script>"
+	repo:recordDetails(saved.id, 1, details(raw), 1000)
+	local view = repo:getDetails(saved.id, 1)
+	t:eq(view.request_preview, "abc\0")
+	t:eq(view.request_saved_bytes, #raw)
+	t:eq(repo:getBody(saved.id, "request", 1), raw)
+	t:eq(repo:getBody(saved.id, "response", 1), "data: [DONE]\n\n")
+	local listed = repo:list({}, 1000)
+	t:eq(listed[1].request_body, nil)
+	t:eq(listed[1].request_preview, nil)
+	storage:close()
+end
+
+function test.detail_failure_rolls_back_without_losing_metadata_or_previous_bodies(t)
+	local repo, storage = open()
+	local saved = repo:record(row(1000))
+	repo:recordDetails(saved.id, 1, details("keep"), 1000)
+	t:has_error(function() repo:recordDetails(saved.id, 2, details("foreign"), 1000) end)
+	t:has_error(function() repo:recordDetails(saved.id, 1, details("duplicate"), 1000) end)
+	t:eq(repo:getBody(saved.id, "request", 1), "keep")
+	local newer = repo:record(row(1001))
+	local invalid = details("bad")
+	invalid.request_state = "invalid"
+	t:has_error(function() repo:recordDetails(newer.id, 1, invalid, 1001) end)
+	t:assert(repo:get(newer.id, 1, 1001))
+	t:eq(repo:getBody(saved.id, "request", 1), "keep")
+	storage.db:exec("BEGIN")
+	storage.db:exec("ROLLBACK")
+	storage:close()
+end
+
+function test.storage_caps_cannot_be_bypassed_with_nul_text(t)
+	local repo, storage = open()
+	local saved = repo:record(row(1000))
+	local oversized = details("\0" .. string.rep("x", 16 * 1024 * 1024))
+	t:has_error(function() repo:recordDetails(saved.id, 1, oversized, 1000) end)
+	t:eq(repo:getDetails(saved.id, 1), nil)
+	local oversized_response = details("small")
+	oversized_response.response_body, oversized_response.response_bytes = oversized.request_body, #oversized.request_body
+	t:has_error(function() repo:recordDetails(saved.id, 1, oversized_response, 1000) end)
+	t:eq(repo:getDetails(saved.id, 1), nil)
+	t:assert(repo:get(saved.id, 1, 1000))
+	storage:close()
+end
+
+function test.failed_capture_does_not_pin_payloads_older_than_the_last_ten_completions(t)
+	local repo, storage = open()
+	repo.details_per_user = 2
+	local saved = repo:record(row(1000))
+	repo:recordDetails(saved.id, 1, details("old"), 1000)
+	repo:record(row(1001))
+	repo:record(row(1002))
+	repo:rotateDetails(1)
+	t:eq(repo:getBody(saved.id, "request", 1), nil)
+	t:eq(repo:get(saved.id, 1, 1002).has_details, false)
+	storage:close()
+end
+
 return test

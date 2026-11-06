@@ -52,10 +52,17 @@ Deploys to `/home/semyon422/ai-router` on the VPS, one `ai-router` compose servi
 (listening on `127.0.0.1:28083`), state in `server-state/` (`config.lua`, `network.lua`,
 `router.db`):
 
-- **Schema 8 → 9:** back up SQLite consistently before upgrading. Startup migrates
-  transactionally, deleting only old unowned request logs; users, grants, aggregates
-  and credentials are preserved. All accounts initially have role `user`: assign
-  the intended administrator with `router_update_user({id, role="admin"})` using MCP.
+- **Schemas 8/9 → 10:** back up SQLite consistently before upgrading. Startup migrates
+  transactionally. The 8 → 9 step deletes only old unowned request logs and gives
+  existing accounts role `user`; assign the intended administrator with
+  `router_update_user({id, role="admin"})` using MCP. The additive 9 → 10 step
+  preserves accounts/roles/history and adds full request details.
+- **Sensitive payload storage:** the last ten completed inference requests per account
+  retain original request and JSON/SSE response bodies, up to 16 MiB each, until
+  replaced (no age limit). Owners and admins can inspect them at `/requests/<id>`.
+  Headers/credentials are not collected, but secrets pasted into messages are not
+  redacted. Protect the database, WAL/SHM and backups; rotation is logical deletion,
+  not cryptographic erasure, and does not purge existing backups.
 - `make config` — create the private config with random secrets (one time).
 - Push to `master` (or dispatch the workflow) — GitHub Actions runs
   `./deploy.sh <commit>` over SSH: checkout, `./test`, compose recreate, health wait.

@@ -8,7 +8,7 @@ function test.creates_empty_database(t)
 	local storage = RouterDatabase(LjsqliteDatabase())
 	storage.path = ":memory:"
 	storage:open()
-	t:eq(storage.db:user_version(), 9)
+	t:eq(storage.db:user_version(), 10)
 	local names = {}
 	for _, row in ipairs(storage.db:query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")) do
 		table.insert(names, row.name)
@@ -17,6 +17,7 @@ function test.creates_empty_database(t)
 		"router_channels",
 		"router_models",
 		"router_oauth_credentials",
+		"router_request_details",
 		"router_request_logs",
 		"router_usage_models",
 		"router_user_models",
@@ -32,7 +33,7 @@ function test.migrate_is_idempotent(t)
 	storage.path = ":memory:"
 	storage:open()
 	storage:migrate()
-	t:eq(storage.db:user_version(), 9)
+	t:eq(storage.db:user_version(), 10)
 	t:eq(#storage.models.router_users:select(), 0)
 	storage:close()
 end
@@ -42,9 +43,9 @@ function test.rejects_future_version(t)
 	local storage = RouterDatabase(LjsqliteDatabase())
 	storage.path = ":memory:"
 	storage:open()
-	storage.db:user_version(10)
+	storage.db:user_version(11)
 	t:has_error(function() storage:migrate() end)
-	t:eq(storage.db:user_version(), 10)
+	t:eq(storage.db:user_version(), 11)
 	storage:close()
 end
 
@@ -188,7 +189,7 @@ function test.upgrades_eight_preserving_accounts_grants_and_other_tables(t)
 	db:user_version(8)
 	local storage = RouterDatabase(db)
 	storage:migrate()
-	t:eq(db:user_version(), 9)
+	t:eq(db:user_version(), 10)
 	local user = db:query("SELECT * FROM router_users")[1]
 	t:eq(user.id, 7)
 	t:eq(user.role, "user")
@@ -219,6 +220,62 @@ function test.failed_upgrade_rolls_back_account_rebuild(t)
 	t:eq(#storage.db:query("SELECT name FROM sqlite_master WHERE name = 'router_users_v8'"), 0)
 	t:eq(#storage.db:query("SELECT * FROM router_users"), 0)
 	storage:close()
+end
+
+---@param t testing.T
+function test.upgrades_nine_preserving_admins_and_owned_history(t)
+	local storage = RouterDatabase(LjsqliteDatabase())
+	storage.path = ":memory:"
+	storage:open()
+	storage.db:exec("DROP TABLE router_request_details")
+	storage.db:exec([[INSERT INTO router_users (id,name,role,key_hash,key_hint,created_at,updated_at)
+		VALUES (42,'admin','admin','hash','hint',1,2)]])
+	storage.db:user_version(9)
+	local log = storage.models.router_request_logs:create({user_id = 42, created_at = 1000, user = "admin",
+		model = "old", channel = "old", upstream_model = "old", protocol = "responses", stream = true,
+		status = 200, duration_ms = 20, input_tokens = 5, output_tokens = 2, cached_input_tokens = 0, estimated = false})
+	storage:migrate()
+	t:eq(storage.db:user_version(), 10)
+	t:eq(storage.db:query("SELECT model FROM router_request_logs WHERE id = " .. log.id)[1].model, "old")
+	t:eq(storage.models.router_users:select()[1].role, "admin")
+	t:eq(storage.models.router_users:select()[1].id, 42)
+	t:eq(#storage.db:query("SELECT * FROM router_request_details"), 0)
+	storage:migrate()
+	storage:close()
+end
+
+---@param t testing.T
+function test.failed_nine_upgrade_keeps_version_and_existing_tables(t)
+	local storage = RouterDatabase(LjsqliteDatabase())
+	storage.path = ":memory:"
+	storage:open()
+	storage.db:user_version(9)
+	t:has_error(function() storage:migrate() end)
+	t:eq(storage.db:user_version(), 9)
+	t:eq(#storage.db:query("SELECT * FROM router_request_details"), 0)
+	storage:close()
+end
+
+function test.failure_in_second_upgrade_step_restores_schema_eight_and_unowned_logs(t)
+	local db = LjsqliteDatabase()
+	db:open(":memory:")
+	db:exec([[CREATE TABLE router_users (id INTEGER PRIMARY KEY, name TEXT UNIQUE, key_hash TEXT UNIQUE,
+		key_hint TEXT, disabled INTEGER, max_concurrency INTEGER, max_rpm INTEGER, created_at INTEGER, updated_at INTEGER);
+		INSERT INTO router_users VALUES (7, 'old', 'hash', 'hint', 0, 2, 10, 100, 200);
+		CREATE TABLE router_request_logs (id INTEGER PRIMARY KEY, user TEXT);
+		INSERT INTO router_request_logs VALUES (123, 'unowned');
+		CREATE TABLE router_request_details (conflict INTEGER);]])
+	db:user_version(8)
+	local storage = RouterDatabase(db)
+	t:has_error(function() storage:migrate() end)
+	t:eq(db:user_version(), 8)
+	t:eq(db:query("SELECT user FROM router_request_logs WHERE id = 123")[1].user, "unowned")
+	t:eq(db:query("SELECT key_hash FROM router_users WHERE id = 7")[1].key_hash, "hash")
+	t:eq(#db:query("PRAGMA table_info(router_users)"), 9)
+	t:eq(#db:query("SELECT name FROM sqlite_master WHERE name = 'router_users_v8'"), 0)
+	db:exec("BEGIN")
+	db:exec("ROLLBACK")
+	db:close()
 end
 
 return test

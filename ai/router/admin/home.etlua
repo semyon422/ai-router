@@ -1,12 +1,12 @@
 <div class="channel-grid">
 <section class="channel-card">
 <h2>Chat</h2>
-<p class="muted">Talk to your available models. Conversations stay in this browser.</p>
+<p class="muted">Talk to your available models. History is browser-local; the server retains your last ten requests and replies.</p>
 <a href="/chat">Open chat →</a>
 </section>
 <section class="channel-card">
 <h2>Requests</h2>
-<p class="muted"><%= user.role == "admin" and "Review request metadata across all users." or "Review your request history and token usage." %></p>
+<p class="muted"><%= user.role == "admin" and "Review request metadata and the latest saved payloads across all users." or "Review your request history and token usage." %></p>
 <a href="/requests">View requests →</a>
 </section>
 <% if user.role == "admin" then %>

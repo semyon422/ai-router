@@ -1,0 +1,39 @@
+<p><a href="/requests">← Requests</a></p>
+<dl class="request-facts">
+<dt>Started</dt><dd><%= os.date("%Y-%m-%d %H:%M:%S", row.created_at) %> (server time)</dd>
+<dt>User</dt><dd><%= row.user %> · account #<%= row.user_id %></dd>
+<dt>Requested model</dt><dd><%= row.model ~= "" and row.model or "Unknown" %></dd>
+<dt>Channel / upstream</dt><dd><%= row.channel ~= "" and row.channel or "Unknown" %> / <%= row.upstream_model ~= "" and row.upstream_model or "Unknown" %></dd>
+<dt>Protocol</dt><dd><%= row.protocol == "responses" and "Responses" or "Chat Completions" %> · <%= row.stream and "SSE" or "JSON" %></dd>
+<dt>Result</dt><dd><span class="badge <%= row.status >= 400 and 'error' or 'ok' %>"><%= row.status %></span><% if row.error_code then %> <%= row.error_code %><% end %><% if details then %> · HTTP <%= details.http_status %> attempted<% end %></dd>
+<dt>Duration / TTFT</dt><dd><%= string.format("%.3fs", row.duration_ms / 1000) %> / <%= row.ttft_ms and string.format("%.3fs", row.ttft_ms / 1000) or "Unknown" %></dd>
+<dt>Generation / speed</dt><dd><%= row.generation_ms and string.format("%.3fs", row.generation_ms / 1000) or "Unknown" %> / <%= row.output_tps and string.format("%.1f tokens/s", row.output_tps) or "Unknown" %></dd>
+<dt>Input / cached / output</dt><dd><%= row.input_tokens %> / <%= row.cached_input_tokens %> / <%= row.output_tokens %> · <%= row.estimated and "estimated" or "reported" %></dd>
+</dl>
+<p class="muted">Full payloads are retained for the last ten completed inference requests of each account, across API and chat, until replaced by newer requests. Each body is limited to 16 MiB. Administrators can view all accounts' payloads. Authorization headers and cookies are not recorded; secrets included in message text are not redacted.</p>
+<% if not details then %>
+<section class="request-empty"><h2>Full payload not retained</h2><p>It may predate capture, have been replaced by newer requests, or not have been recorded. Metadata remains available.</p></section>
+<% else %>
+<p><code>POST <%= details.request_path %></code> · response <code><%= details.response_content_type %></code></p>
+<% if details.capture_failed then %><p class="error" role="status">Payload capture failed. The saved bodies may be incomplete.</p><% end %>
+<% if details.request_state == "not_read" then %><p class="error">The request body was not read: the request was rejected before body consumption. An empty saved body does not mean the client sent no messages.</p><% elseif details.request_state == "partial" then %><p class="error">The request body could not be read completely. Only the received portion is available.</p><% end %>
+<% if not details.response_complete then %><p class="error">The response stream failed or its transport closed. The saved response may be partial.</p><% end %>
+<p class="muted">This is the client-facing payload, not an upstream request dump. Response bytes were handed to the transport; receipt is not guaranteed after a disconnect. Formatting is display-only. Downloads preserve the saved bytes.</p>
+<% for _, side in ipairs({"request", "response"}) do
+local preview = details[side .. "_preview"]
+local saved = details[side .. "_saved_bytes"]
+local total = details[side .. "_bytes"]
+local truncated = details[side .. "_truncated"]
+local url = "/requests/" .. id .. "/" .. side
+%>
+<section class="request-payload" data-payload data-url="<%= url %>" data-complete="<%= #preview == saved and 'true' or 'false' %>">
+<div class="section-heading"><h2><%= side == "request" and "Request body" or "Response body" %></h2><div class="request-payload-actions">
+<% if #preview < saved then %><button type="button" data-load hidden>Load full body</button><% end %>
+<button type="button" data-format hidden>Format JSON/SSE</button>
+<a href="<%= url %>?download=1">Download saved body</a></div></div>
+<p class="muted" data-status role="status"><%= saved %> saved bytes / <%= total %> observed bytes.<% if #preview < saved then %> Preview: first <%= #preview %> bytes. Load or download to see the rest.<% end %></p>
+<% if truncated then %><p class="error">Truncated at the 16 MiB storage limit. The omitted bytes were not saved and cannot be recovered here.</p><% end %>
+<pre tabindex="0" aria-label="<%= side %> payload" data-body><span><%= preview %></span></pre>
+</section>
+<% end %>
+<% end %>

@@ -21,7 +21,7 @@ local schema_path = debug.getinfo(1, "S").source:match("^@?(.+)/[^/]+$") .. "/db
 local RouterDatabase = class()
 
 RouterDatabase.path = "userdata/ai_router.db"
-local user_version = 9
+local user_version = 10
 
 ---@param db rdb.SqliteDatabase
 function RouterDatabase:new(db)
@@ -56,13 +56,19 @@ end
 function RouterDatabase:migrate()
 	assert(self.db:user_version() <= user_version, "router database is newer than this code")
 	local version = self.db:user_version()
-	assert(version == 0 or version == 8 or version == user_version,
-		"router database schema is incompatible; only schema 8 can be upgraded")
+	assert(version == 0 or version == 8 or version == 9 or version == user_version,
+		"router database schema is incompatible; only schemas 8 and 9 can be upgraded")
 	local ok, err = pcall(function()
-		if version == 0 or version == 8 then
+		if version ~= user_version then
 			self.db:exec("BEGIN")
-			local path = version == 8 and schema_path:gsub("db.sql$", "upgrade_v8.sql") or schema_path
-			self.db:exec(io_util.read_file(path))
+			if version == 0 then
+				self.db:exec(io_util.read_file(schema_path))
+			else
+				if version == 8 then
+					self.db:exec(io_util.read_file(schema_path:gsub("db.sql$", "upgrade_v8.sql")))
+				end
+				self.db:exec(io_util.read_file(schema_path:gsub("db.sql$", "upgrade_v9.sql")))
+			end
 			self.db:user_version(user_version)
 			self.db:exec("COMMIT")
 		end

@@ -25,7 +25,7 @@
 <p class="eyebrow">Workspace</p>
 <a href="/"<% if title == "Home" then %> aria-current="page"<% end %>>Home</a>
 <a href="/chat"<% if title == "Chat" then %> aria-current="page"<% end %>>Chat</a>
-<a href="/requests"<% if title == "Requests" then %> aria-current="page"<% end %>>Requests</a>
+<a href="/requests"<% if title == "Requests" or title:match("^Request #%d+$") then %> aria-current="page"<% end %>>Requests</a>
 <% if user.role == "admin" then %>
 <% for _, item in ipairs({{"Overview", "overview"}, {"Channels", "channels"}, {"Usage", "usage"}, {"Models", "models"}, {"Users", "users"}}) do %>
 <a href="/<%= item[2] %>"<% if title == item[1] then %> aria-current="page"<% end %>><%= item[1] %></a>
@@ -37,14 +37,14 @@
 <% if title == "Chat" then %>
 <%- content %>
 <% else %>
-<header class="page-heading"><div><p class="eyebrow">Router workspace</p><h1><%= title %></h1><p class="muted"><%= user.role == "admin" and title ~= "Home" and "Read-only dashboard. Manage users, channels, models, and authorization through MCP." or title == "Home" and "Choose where to start." or "Your request metadata. Conversations stay in your browser." %></p></div></header>
+<header class="page-heading"><div><p class="eyebrow">Router workspace</p><h1><%= title %></h1><p class="muted"><%= user.role == "admin" and title ~= "Home" and "Read-only dashboard. Manage users, channels, models, and authorization through MCP." or title == "Home" and "Choose where to start." or "Your request history. The last ten requests include server-stored messages and replies." %></p></div></header>
 <% if title == "Overview" then %>
 <div class="live-toolbar" aria-label="Overview updates">
 <div><span id="overview-status" class="muted">Snapshot from page load. Enable JavaScript for automatic updates.</span><p id="overview-error" class="error" role="status"></p><a id="overview-sign-in" href="/login" hidden>Sign in again →</a></div>
 <button id="overview-refresh" type="button" hidden>Refresh now</button>
 </div>
 <% end %>
-<div id="page-content" class="page-content<% if title ~= "Home" and title ~= "Overview" and title ~= "Usage" and title ~= "Requests" then %> scroll<% end %>"><%- content %></div>
+<div id="page-content" class="page-content<% if title ~= "Home" and title ~= "Overview" and title ~= "Usage" and title ~= "Requests" and not title:match("^Request #%d+$") then %> scroll<% end %>"><%- content %></div>
 <% if title ~= "Home" then %><footer><%= title == "Overview" and "Overview updates every 30 seconds while this tab is visible. Without JavaScript, reload for new data." or "Snapshot from this page load. Reload to see the latest data." %><% if user.role == "admin" then %> Quotas never change routing.<% end %></footer><% end %>
 <% end %>
 </main>

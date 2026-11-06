@@ -175,6 +175,13 @@ button:disabled { cursor: default; opacity: 0.55; }
 .request-empty h3 { font-size: 16px; }
 .request-help { color: var(--muted); font-size: 12px; margin-top: 24px; }
 .request-help p { max-width: 850px; margin-top: 16px; }
+.request-facts { display: grid; grid-template-columns: minmax(100px, 180px) minmax(0, 1fr); gap: 10px 18px; margin: 24px 0; }
+.request-facts dt { color: var(--muted); }
+.request-facts dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.request-payload { margin-top: 28px; padding: 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); min-width: 0; }
+.request-payload .section-heading { flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+.request-payload-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.request-payload pre { max-height: 65vh; overflow: auto; padding: 16px; background: var(--raised); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 2; }
 footer { margin-top: 32px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
 .skip-link { position: absolute; left: 16px; top: -100px; padding: 10px; background: var(--panel); z-index: 2; }
 .skip-link:focus { top: 12px; }

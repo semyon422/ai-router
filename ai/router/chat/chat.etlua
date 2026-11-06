@@ -35,4 +35,4 @@
 <button id="chat-send" type="button"<% if #models == 0 then %> disabled<% end %>>Send</button>
 </div>
 <p id="chat-status" class="chat-status muted" role="status"></p>
-<p class="chat-hint">Timing and tokens/s are browser-observed, including network/relay latency; tokens are provider-reported when available. GLM and compatible models only. Conversations and settings stay in this browser.</p>
+<p class="chat-hint">Timing and tokens/s are browser-observed, including network/relay latency; tokens are provider-reported when available. GLM and compatible models only. Conversations and settings are browser-local; the server also retains the last ten inference requests and replies per account, visible to you and administrators.</p>

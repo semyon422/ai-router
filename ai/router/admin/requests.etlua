@@ -30,18 +30,18 @@ local error_descriptions = {
 <% if #active_filters > 0 then %><nav class="filter-chips" aria-label="Active filters"><% for _, filter in ipairs(active_filters) do %><a href="<%= filter.remove_url %>" aria-label="Remove <%= filter.label %> filter: <%= filter.value %>"><span><%= filter.label %>: <strong><%= filter.value %></strong></span><span aria-hidden="true">×</span></a><% end %></nav><% end %>
 <div class="section-heading request-heading"><div><h2><%= filters.before and "Older results" or "Latest requests" %></h2><p class="muted">Showing <%= #rows %> completed requests · up to <%= page_size %> per page.</p></div>
 <nav class="request-pagination" aria-label="Request pages"><a href="<%= latest_url %>">Latest</a><% if older_url then %><a href="<%= older_url %>">Older →</a><% end %></nav></div>
-<p class="muted filter-help">Last <%= retention_days %> days, up to <%= max_rows %> entries. Completion-order IDs, newest first; timestamps show request start in the server timezone. No prompts, responses or raw error messages are stored.</p>
+<p class="muted filter-help">Last <%= retention_days %> days, up to <%= max_rows %> metadata-only entries, plus the last ten detailed requests of each account regardless of age. Click a linked ID to view saved request/response bodies (up to 16 MiB each). Completion-order IDs, newest first; timestamps show request start in the server timezone.</p>
 <div class="scroll request-table" role="region" aria-label="Request history" tabindex="0"><table>
 <thead><tr><th scope="col">ID</th><th scope="col">Started</th><th scope="col">User</th><th scope="col">Channel</th><th scope="col">Model</th><th scope="col">Protocol</th><th scope="col">Result</th><th scope="col">Duration</th><th scope="col">TTFT</th><th scope="col">Tokens/s</th><th scope="col">Input</th><th scope="col">Cached input</th><th scope="col">Output</th></tr></thead>
 <tbody><% for _, row in ipairs(rows) do %>
-<tr><td><%= row.id %></td><td class="request-time"><%= os.date("%Y-%m-%d %H:%M:%S", row.created_at) %></td>
+<tr><td><% if row.has_details then %><a href="/requests/<%= string.format('%.0f', row.id) %>" aria-label="View request <%= row.id %> details"><%= row.id %></a><% else %><%= row.id %><% end %></td><td class="request-time"><%= os.date("%Y-%m-%d %H:%M:%S", row.created_at) %></td>
 <td><%= row.user %></td><td><%= row.channel ~= "" and row.channel or "—" %></td>
 <td><span title="<%= row.model %>"><%= row.model:match("^[%w._%-]+/(.+)$") or (row.model ~= "" and row.model or "—") %></span>
 <% if row.upstream_model ~= "" and row.upstream_model ~= row.model and row.model ~= row.channel .. "/" .. row.upstream_model then %>
 <div class="muted">→ <%= row.upstream_model %></div>
 <% end %></td>
 <td><%= row.protocol == "responses" and "Responses" or "Chat Completions" %> · <%= row.stream and "SSE" or "JSON" %></td>
-<td><span class="badge <%= row.status >= 400 and 'error' or 'ok' %>"><%= row.status %></span><% if row.error_code or row.status >= 400 then %><div class="muted" title="<%= error_descriptions[row.error_code] or 'No detailed category recorded. Raw upstream errors are not stored.' %>"><%= row.error_code or "Not recorded" %></div><% end %></td>
+<td><span class="badge <%= row.status >= 400 and 'error' or 'ok' %>"><%= row.status %></span><% if row.error_code or row.status >= 400 then %><div class="muted" title="<%= error_descriptions[row.error_code] or 'No detailed category recorded. See retained response payloads for available details.' %>"><%= row.error_code or "Not recorded" %></div><% end %></td>
 <td class="request-duration"><%= string.format("%.3fs", row.duration_ms / 1000) %></td>
 <td><%= row.ttft_ms and string.format("%.3fs", row.ttft_ms / 1000) or "—" %></td>
 <td><%= row.output_tps and string.format("%.1f", row.output_tps) or "—" %></td>

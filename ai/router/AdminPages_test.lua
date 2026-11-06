@@ -544,7 +544,7 @@ function test.request_columns_show_safe_metrics_unknowns_and_escaped_suggestions
 		'title="alias&quot;&lt;tag&gt;">alias&quot;&lt;tag&gt;</span>', '<div class="muted">→ org/model</div>',
 		'<td>~0</td>',
 		'<option value="&lt;script&gt;UNTRUSTED&lt;/script&gt;">', 'historical-deleted-channel',
-		'title="No detailed category recorded. Raw upstream errors are not stored."'}) do
+		'title="No detailed category recorded. See retained response payloads for available details."'}) do
 		t:assert(response.body:find(text, 1, true), text)
 	end
 	t:eq(response.body:find('<details class="request-details">', 1, true), nil)
@@ -720,6 +720,110 @@ function test.home_is_separate_from_chat_and_login_for_both_roles(t)
 		t:eq(response.status, 303)
 		t:eq(response.headers:get("Location"), "/")
 	end
+	stack:close()
+end
+
+local function accountCookie(t, stack, key)
+	local response = request(t, stack, "POST", "/login", {api_key = key})
+	t:eq(response.status, 303)
+	return assert(response.headers:get("Set-Cookie"):match("(router_chat=[^;]+)"))
+end
+
+local function detailedRequest(stack, owner, body)
+	local repo = stack.server.inference.request_logs_repo
+	local saved = repo:record({user_id = owner.id, created_at = os.time(), user = owner.name,
+		model = "local/mock", channel = "local", upstream_model = "mock", protocol = "chat_completions",
+		stream = true, status = 200, duration_ms = 100, input_tokens = 10, cached_input_tokens = 2,
+		output_tokens = 1, estimated = false})
+	repo:recordDetails(saved.id, owner.id, {request_path = "/chat/completions", request_body = body,
+		response_body = "data: " .. body .. "\n\ndata: [DONE]\n\n", request_bytes = #body, response_bytes = #body + 22,
+		request_state = "complete", request_truncated = false, response_truncated = false,
+		response_complete = true, capture_failed = false, http_status = 200, response_content_type = "text/event-stream"}, os.time())
+	return saved.id
+end
+
+function test.request_details_and_raw_bodies_are_cookie_authenticated_and_owner_scoped(t)
+	local stack = Stack()
+	local alice, key = stack.users:create("alice", os.time())
+	local bob, bob_key = stack.users:create("bob", os.time())
+	local cookie = accountCookie(t, stack, key)
+	local bob_cookie = accountCookie(t, stack, bob_key)
+	local raw = '{"messages":[{"role":"user","content":"</pre><script>PRIVATE-PROMPT</script>"}]}'
+	local id = detailedRequest(stack, alice, raw)
+	local url = "/requests/" .. id
+	local response = request(t, stack, "GET", url)
+	t:eq(response.status, 303)
+	t:eq(response.headers:get("Location"), "/login")
+	response = request(t, stack, "GET", url .. "/request")
+	t:eq(response.status, 401)
+	for _, path in ipairs({url, url .. "/request", url .. "/response?download=1"}) do
+		response = request(t, stack, "GET", path, nil, bob_cookie)
+		t:eq(response.status, 404)
+		t:eq(response.body:find("PRIVATE-PROMPT", 1, true), nil)
+	end
+	response = request(t, stack, "GET", url .. "?user_id=" .. bob.id, nil, cookie)
+	t:eq(response.status, 200)
+	t:eq(response.headers:get("Cache-Control"), "no-store")
+	t:assert(response.body:find("&lt;/pre&gt;&lt;script&gt;PRIVATE-PROMPT", 1, true))
+	t:eq(response.body:find("<script>PRIVATE-PROMPT", 1, true), nil)
+	t:assert(response.body:find('aria-current="page">Requests', 1, true))
+	response = request(t, stack, "GET", "/requests", nil, cookie)
+	t:assert(response.body:find('href="' .. url .. '"', 1, true))
+	for _, side in ipairs({"request", "response"}) do
+		response = request(t, stack, "GET", url .. "/" .. side .. "?download=1", nil, cookie)
+		t:eq(response.status, 200)
+		t:eq(response.headers:get("Content-Type"), "text/plain; charset=utf-8")
+		t:eq(response.headers:get("X-Content-Type-Options"), "nosniff")
+		t:eq(response.headers:get("Content-Security-Policy"), "sandbox; default-src 'none'")
+		t:eq(response.headers:get("Cache-Control"), "no-store")
+		t:assert(response.headers:get("Content-Disposition"):find("attachment;", 1, true))
+		t:eq(response.body, side == "request" and raw or "data: " .. raw .. "\n\ndata: [DONE]\n\n")
+	end
+	local admin_cookie = login(t, stack)
+	t:eq(request(t, stack, "GET", url, nil, admin_cookie).status, 200)
+	t:eq(request(t, stack, "GET", url .. "/response", nil, admin_cookie).status, 200)
+	t:eq(request(t, stack, "POST", url, {ignored = "1"}, cookie).status, 405)
+	for _, path in ipairs({"/requests/0", "/requests/-1", "/requests/1e2", url .. "/unknown", "/requests/9007199254740992"}) do
+		t:eq(request(t, stack, "GET", path, nil, cookie).status, 404)
+	end
+	stack.users:update(alice.id, {disabled = true}, os.time())
+	t:eq(request(t, stack, "GET", url .. "/request", nil, cookie).status, 401)
+	stack.users:delete(alice.id)
+	local replacement, replacement_key = stack.users:create("alice", os.time())
+	t:assert(replacement.id > alice.id)
+	local replacement_cookie = accountCookie(t, stack, replacement_key)
+	t:eq(request(t, stack, "GET", url .. "/request", nil, replacement_cookie).status, 404)
+	t:eq(request(t, stack, "GET", url .. "/request", nil, admin_cookie).body, raw)
+	stack:close()
+end
+
+function test.request_detail_previews_are_bounded_and_eviction_and_role_changes_are_immediate(t)
+	local stack = Stack()
+	local alice = stack.users:create("alice", os.time())
+	local cookie = login(t, stack)
+	local repo = stack.server.inference.request_logs_repo
+	repo.preview_size = 32
+	local raw = '{"content":"' .. string.rep("private", 100) .. '"}'
+	local id = detailedRequest(stack, alice, raw)
+	local url = "/requests/" .. id
+	local response = request(t, stack, "GET", url, nil, cookie)
+	t:eq(response.status, 200)
+	t:assert(response.body:find("Preview: first 32 bytes", 1, true))
+	t:eq(response.body:find(string.rep("private", 10), 1, true), nil)
+	t:assert(response.body:find("Load full body", 1, true))
+	t:eq(request(t, stack, "GET", url .. "/request", nil, cookie).body, raw)
+	local admin = stack.users:list()[2]
+	stack.users:update(admin.id, {role = "user"}, os.time())
+	t:eq(request(t, stack, "GET", url, nil, cookie).status, 404)
+	t:eq(request(t, stack, "GET", url .. "/request", nil, cookie).status, 404)
+	stack.users:update(admin.id, {role = "admin"}, os.time())
+	for _ = 1, 10 do detailedRequest(stack, alice, "{}") end
+	response = request(t, stack, "GET", url, nil, cookie)
+	t:eq(response.status, 200)
+	t:assert(response.body:find("Full payload not retained", 1, true))
+	t:eq(request(t, stack, "GET", url .. "/request", nil, cookie).status, 404)
+	response = request(t, stack, "GET", "/requests", nil, cookie)
+	t:eq(response.body:find('href="' .. url .. '"', 1, true), nil)
 	stack:close()
 end
 

@@ -7,6 +7,7 @@ local ChatProtocol = require("ai.openai.ChatCompletionsProtocol")
 local ResponsesProtocol = require("ai.openai.ResponsesProtocol")
 local RequestLogsRepo = require("ai.router.RequestLogsRepo")
 local RequestMetrics = require("ai.router.RequestMetrics")
+local RequestCapture = require("ai.router.RequestCapture")
 local ResponseWriter = require("ai.router.ResponseWriter")
 local sendError = ResponseWriter.sendError
 local sendJson = ResponseWriter.sendJson
@@ -473,6 +474,8 @@ end
 ---@field result ai.router.AttemptResult?
 ---@field admitted boolean?
 ---@field finalized boolean?
+---@field capture ai.router.RequestCapture?
+---@field request_path string?
 
 -- All exit paths share this finalizer. Persistence failures are isolated:
 -- neither aggregate writes nor request-log writes can keep a slot occupied or
@@ -498,8 +501,9 @@ function InferenceService:finalize(user, context)
 		if not recorded then self.logger("usage write failed") end
 	end
 	if not user.disabled then
+		local log_row
 		local logged = pcall(function()
-			self.request_logs_repo:record({created_at = context.created_at, user_id = user.id, user = user.name,
+			log_row = self.request_logs_repo:record({created_at = context.created_at, user_id = user.id, user = user.name,
 				model = request and type(request.model) == "string" and request.model:sub(1, 193) or "",
 				channel = result and result.channel or "",
 				upstream_model = result and result.upstream_model or "",
@@ -516,6 +520,16 @@ function InferenceService:finalize(user, context)
 			})
 		end)
 		if not logged then self.logger("request log write failed") end
+		if logged and log_row and context.capture then
+			local saved = pcall(function()
+				-- A failed capture must not keep a payload older than this owner's last ten completions.
+				self.request_logs_repo:rotateDetails(user.id)
+				local details = context.capture:snapshot()
+				details.request_path = context.request_path
+				self.request_logs_repo:recordDetails(log_row.id, user.id, details, context.created_at)
+			end)
+			if not saved then self.logger("request detail write failed") end
+		end
 	end
 end
 
@@ -526,7 +540,8 @@ end
 ---@param metrics ai.router.RequestMetrics
 ---@return table? request
 ---@return integer? status
-function InferenceService:readRequest(req, res, metrics)
+---@param capture ai.router.RequestCapture?
+function InferenceService:readRequest(req, res, metrics, capture)
 	local transfer_encodings = req.headers:getTable("Transfer-Encoding")
 	local content_lengths = req.headers:getTable("Content-Length")
 	local status, message, code
@@ -548,7 +563,9 @@ function InferenceService:readRequest(req, res, metrics)
 		sendError(res, status, message, "invalid_request_error", code, metrics)
 		return nil, status
 	end
-	local body, receive_err = req:receive("*a")
+	if capture then capture.request_state = "partial" end
+	local body, receive_err, partial = req:receive("*a")
+	if capture and not pcall(capture.read, capture, body, partial) then capture.capture_failed = true end
 	if body then
 		local decoded, decode_err = json.decode_safe(body)
 		if type(decoded) == "table" then return decoded end
@@ -573,6 +590,13 @@ function InferenceService:process(req, res, user, protocol, metrics)
 	local context = {protocol = protocol, metrics = metrics, created_at = os.time(),
 		started_at = metrics.started_at, user_key = tostring(user.id), status = 500}
 	local native = protocol == "responses"
+	context.request_path = (req.uri or ""):match("^[^?]+")
+	if context.request_path ~= "/v1/chat/completions" and context.request_path ~= "/v1/responses"
+		and context.request_path ~= "/chat/completions" then
+		context.request_path = native and "/v1/responses" or "/v1/chat/completions"
+	end
+	context.capture = RequestCapture()
+	context.capture:attach(res)
 	local ok = pcall(function()
 		if not self:consumeRateLimit(context.user_key, user.max_rpm) then
 			context.status = 429
@@ -587,7 +611,7 @@ function InferenceService:process(req, res, user, protocol, metrics)
 			return
 		end
 		context.admitted = true
-		context.request, context.status = self:readRequest(req, res, metrics)
+		context.request, context.status = self:readRequest(req, res, metrics, context.capture)
 		if not context.request then return end
 		local session_id, session_err
 		if native then session_id, session_err = ResponsesProtocol.getSessionAffinity(req) end
@@ -615,6 +639,7 @@ function InferenceService:process(req, res, user, protocol, metrics)
 			end
 		end)
 	end
+	context.capture:detach(res, context.status)
 	self:finalize(user, context)
 	return context.status
 end

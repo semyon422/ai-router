@@ -43,9 +43,10 @@ function AdminPages:new(options)
 	self.stylesheet = io_util.read_file(admin_dir .. "/dashboard.css")
 	self.overview_script = io_util.read_file(admin_dir .. "/overview.js")
 	self.usage_script = io_util.read_file(admin_dir .. "/usage.js")
+	self.request_script = io_util.read_file(admin_dir .. "/request.js")
 	self.theme_script = io_util.read_file(admin_dir .. "/theme.js")
 	self.templates = {}
-	for _, name in ipairs({"layout", "home", "overview", "users", "channels", "models", "usage", "requests"}) do
+	for _, name in ipairs({"layout", "home", "overview", "users", "channels", "models", "usage", "requests", "request"}) do
 		self.templates[name] = etlua.compile(io_util.read_file(admin_dir .. "/" .. name .. ".etlua"), "@" .. name)
 	end
 end
@@ -95,11 +96,15 @@ end
 ---@return boolean
 function AdminPages:handle(req, res)
 	local path = req.uri:match("^[^?]+") or req.uri
+	local detail_id, body_side = path:match("^/requests/([1-9]%d*)/([a-z]+)$")
+	if body_side and body_side ~= "request" and body_side ~= "response" then return false end
+	detail_id = tonumber(detail_id or path:match("^/requests/([1-9]%d*)$"))
+	if detail_id and detail_id >= 2 ^ 53 then return false end
 	local pages = {["/"] = self.pageHome, ["/overview"] = self.pageOverview,
 		["/users"] = self.pageUsers, ["/channels"] = self.pageChannels,
 		["/models"] = self.pageModels, ["/usage"] = self.pageUsage,
 		["/requests"] = self.pageRequests}
-	if not pages[path] and path ~= "/overview/data" then return false end
+	if not pages[path] and path ~= "/overview/data" and not detail_id then return false end
 	local session, user = self:session(req)
 	if path == "/overview/data" then
 		if not session then
@@ -116,11 +121,12 @@ function AdminPages:handle(req, res)
 		return true
 	end
 	if not session then
-		if req.method == "GET" then redirect(res, "/login")
+		if body_side then sendJson(res, 401, {error = "Sign in to view request details."})
+		elseif req.method == "GET" then redirect(res, "/login")
 		else send(res, 403, "Sign in with your API key.") end
 		return true
 	end
-	if user.role ~= "admin" and path ~= "/requests" and path ~= "/" then
+	if user.role ~= "admin" and path ~= "/requests" and path ~= "/" and not detail_id then
 		send(res, 403, "Administrator access required.")
 		return true
 	end
@@ -130,6 +136,10 @@ function AdminPages:handle(req, res)
 		return true
 	end
 	local query = http_util.decode_query_string(req.uri:match("%?(.+)$") or "")
+	if detail_id then
+		self:pageRequest(res, session, detail_id, body_side, query)
+		return true
+	end
 	pages[path](self, res, session, query)
 	return true
 end
@@ -138,11 +148,11 @@ end
 ---@param session {csrf_token: string}
 ---@param title string
 ---@param content string
-function AdminPages:render(res, session, title, content)
+function AdminPages:render(res, session, title, content, page_script)
 	send(res, 200, self.templates.layout({title = title, content = content, csrf_token = session.csrf_token,
 		user = assert(self.users_repo:get(session.user_id)),
 		stylesheet = self.stylesheet, theme_script = self.theme_script,
-		page_script = title == "Overview" and self.overview_script or title == "Usage" and self.usage_script or ""}))
+		page_script = page_script or (title == "Overview" and self.overview_script or title == "Usage" and self.usage_script or "")}))
 end
 
 ---@class ai.router.OverviewChannel
@@ -289,6 +299,34 @@ function AdminPages:pageRequests(res, session, query)
 	self:render(res, session, "Requests", self.templates.requests({rows = rows, filters = filters,
 		options = repo:filterOptions(now, filters.user_id), active_filters = active_filters, latest_url = latest_url,
 		older_url = older_url, max_rows = repo.max_rows, page_size = repo.page_size, retention_days = repo.retention_seconds / 86400}))
+end
+
+function AdminPages:pageRequest(res, session, id, side, query)
+	local user = assert(self.users_repo:get(session.user_id))
+	local owner
+	if user.role ~= "admin" then owner = user.id end
+	local repo = self.server.inference.request_logs_repo
+	local row = repo:get(id, owner, self.get_time())
+	res.headers:set("Referrer-Policy", "no-referrer")
+	if not row then send(res, 404, "Request not found.") return end
+	local id_text = string.format("%.0f", id)
+	if side then
+		local body = repo:getBody(id, side, owner)
+		if not body then send(res, 404, "Request payload not retained.") return end
+		res.status = 200
+		res.headers:set("Content-Type", "text/plain; charset=utf-8")
+		res.headers:set("X-Content-Type-Options", "nosniff")
+		res.headers:set("Content-Security-Policy", "sandbox; default-src 'none'")
+		res.headers:set("Cache-Control", "no-store")
+		res.headers:set("Content-Disposition", (query.download == "1" and "attachment" or "inline")
+			.. '; filename="request-' .. id_text .. '-' .. side .. '.txt"')
+		res:set_length(#body)
+		res:send(body)
+		return
+	end
+	local details = repo:getDetails(id, owner)
+	self:render(res, session, "Request #" .. id_text, self.templates.request({row = row, id = id_text,
+		details = details, preview_size = repo.preview_size}), self.request_script)
 end
 
 return AdminPages
