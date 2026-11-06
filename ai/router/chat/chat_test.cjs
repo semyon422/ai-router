@@ -151,6 +151,80 @@ function userMessage(request) {
 	return body.messages[body.messages.length - 1];
 }
 
+test('raw reasoning remains under its original name through display, restore and follow-up', async () => {
+	const view = start();
+	view.elements['chat-input'].value = 'Think'; view.send();
+	view.requests[0].resolve(sse([
+		JSON.stringify({choices: [{delta: {reasoning: '<script>inert</script>'}, finish_reason: 'length'}]}), '[DONE]',
+	]));
+	await settle(); await settle();
+	const saved = JSON.parse(view.storage['ai-router-chat:1']).messages[1];
+	assert.equal(saved.reasoning, '<script>inert</script>');
+	assert.equal(Object.hasOwn(saved, 'reasoning_content'), false);
+	const body = view.elements['chat-messages'].children[1].children[1];
+	assert.equal(body.children[0].children[1].textContent, saved.reasoning);
+	assert.equal(body.children[1].hidden, true);
+	const stats = view.elements['chat-messages'].children[1].children[2].textContent;
+	assert.equal(stats.includes('TTFT —'), false);
+	const restored = start(null, {storage: view.storage});
+	assert.equal(restored.elements['chat-messages'].children[1].children[1].children[0].children[1].textContent, saved.reasoning);
+	restored.elements['chat-input'].value = 'Next'; restored.send();
+	const sent = JSON.parse(restored.requests[0].options.body).messages[1];
+	assert.deepEqual(sent, saved);
+	restored.send(); await settle();
+});
+
+test('both reasoning fields stay independent; only identical displayed text is deduplicated', async () => {
+	for (const [raw, legacy] of [['first', 'second'], ['same', 'same']]) {
+		const view = start(); view.elements['chat-input'].value = 'Think'; view.send();
+		view.requests[0].resolve(sse([
+			JSON.stringify({choices: [{delta: {reasoning: raw.slice(0, 2), reasoning_content: legacy.slice(0, 1)}}]}),
+			JSON.stringify({choices: [{delta: {reasoning: raw.slice(2), reasoning_content: legacy.slice(1), content: 'answer'}, finish_reason: 'stop'}]}), '[DONE]',
+		]));
+		await settle(); await settle();
+		const saved = JSON.parse(view.storage['ai-router-chat:1']).messages[1];
+		assert.equal(saved.reasoning, raw); assert.equal(saved.reasoning_content, legacy);
+		const reasoning = view.elements['chat-messages'].children[1].children[1].children.filter(node => node.className === 'reasoning' && !node.hidden);
+		assert.equal(reasoning.length, raw === legacy ? 1 : 2);
+		if (raw !== legacy) {
+			assert.deepEqual(reasoning.map(node => node.children[1].textContent), [legacy, raw]);
+			assert.deepEqual(reasoning.map(node => node.children[0].textContent), ['Reasoning (reasoning_content)', 'Reasoning (reasoning)']);
+		}
+		const restored = start(null, {storage: view.storage});
+		restored.elements['chat-input'].value = 'Next'; restored.send();
+		assert.deepEqual(JSON.parse(restored.requests[0].options.body).messages[1], saved);
+		restored.send(); await settle();
+	}
+});
+
+test('null and empty reasoning are not renamed and reported reasoning counters distinguish missing from zero', async () => {
+	for (const count of [undefined, 0, 3]) {
+		const view = start(); view.elements['chat-input'].value = 'Hello'; view.send();
+		view.requests[0].resolve(sse([
+			JSON.stringify({choices: [{delta: {reasoning: null, reasoning_content: '', content: 'answer'}, finish_reason: 'stop'}]}),
+			JSON.stringify({choices: [], usage: {prompt_tokens: 10, completion_tokens: 7, prompt_tokens_details: {cached_tokens: 0},
+				completion_tokens_details: count === undefined ? undefined : {reasoning_tokens: count}}}), '[DONE]',
+		]));
+		await settle(); await settle();
+		const saved = JSON.parse(view.storage['ai-router-chat:1']).messages[1];
+		assert.equal(saved.reasoning, null); assert.equal(saved.reasoning_content, '');
+		const stats = view.elements['chat-messages'].children[1].children[2].textContent;
+		assert.ok(stats.includes('out 7'));
+		assert.equal(stats.includes('reasoning '), count !== undefined);
+		if (count !== undefined) assert.ok(stats.includes('reasoning ' + count));
+	}
+});
+
+test('both reasoning string fields obey the browser content bound', async () => {
+	for (const field of ['reasoning', 'reasoning_content']) {
+		const view = start(); view.elements['chat-input'].value = 'Think'; view.send();
+		view.requests[0].resolve(sse([JSON.stringify({choices: [{delta: {[field]: 'x'.repeat(100001)}}]}), '[DONE]']));
+		await settle(); await settle();
+		assert.match(view.elements['chat-error'].textContent, /Reasoning exceeded/);
+		assert.equal(JSON.parse(view.storage['ai-router-chat:1']).messages.length, 1);
+	}
+});
+
 test('sends the conversation with the CSRF token and renders the streamed reply', async () => {
 	const view = start();
 	view.elements['chat-input'].value = 'Hello';

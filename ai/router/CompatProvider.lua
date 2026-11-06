@@ -67,12 +67,9 @@ function CompatProvider:complete(body, upstream_model)
 	---@cast completion {[string]: any}
 	local choice = completion.choices[1]
 	---@type openai.CanonicalMessage
-	local canonical = ChatProtocol.canonicalMessage(choice.message)
+	local canonical = ChatProtocol.canonicalMessage(choice.message, completion.usage)
 	if type(choice.finish_reason) == "string" then
 		canonical.finish_reason = choice.finish_reason
-	end
-	if not canonical.usage then
-		canonical.usage = ChatProtocol.canonicalUsage(completion.usage)
 	end
 	return canonical
 end

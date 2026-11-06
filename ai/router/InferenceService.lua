@@ -285,7 +285,7 @@ local function attempt(self, res, request, public_model, candidate, completion_i
 	end
 	local sent = sendEvent(res, ChatProtocol.chunk(completion_id, created, public_model, json.object(), ChatProtocol.finishReason(message), include_usage))
 	if sent and include_usage then
-		local usage = ChatProtocol.completionUsage(message.usage)
+		local usage = message.wire_usage or ChatProtocol.completionUsage(message.usage)
 		if usage then
 			sent = sendEvent(res, ChatProtocol.usageChunk(completion_id, created, public_model, usage))
 		end

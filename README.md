@@ -25,6 +25,13 @@ as a signing-secret alias, but password login is removed.
 
 The full specification is in [ai/router/spec.md](ai/router/spec.md).
 
+Chat Completions preserves provider `reasoning` and `reasoning_content` fields
+independently, without renaming or merging. Reported `prompt_tokens_details` and
+`completion_tokens_details` are retained in JSON and requested SSE usage frames;
+missing reasoning counters are not invented or added to completion-token totals.
+The chat displays both reasoning fields and reported reasoning-token counts.
+Native Responses objects and events remain unchanged.
+
 ## Layout
 
 - `ai/router/` — the router: server, providers, repos, admin pages, MCP tools, tests.

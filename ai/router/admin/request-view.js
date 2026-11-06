@@ -68,9 +68,14 @@
         if (Array.isArray(value.content)) content(target, value.content, "Result");
         else structured(target, value.content, "Result");
       } else content(target, value.content);
-      if (typeof value.reasoning_content === "string") part(target, "Reasoning", value.reasoning_content);
-      else if (typeof value.reasoning === "string") part(target, "Reasoning", value.reasoning);
-      else if (Array.isArray(value.reasoning)) content(target, value.reasoning, "Reasoning");
+      const distinct = typeof value.reasoning_content === "string" && value.reasoning_content
+        && typeof value.reasoning === "string" && value.reasoning && value.reasoning !== value.reasoning_content;
+      for (const field of ["reasoning_content", "reasoning"]) {
+        if (field === "reasoning" && typeof value[field] === "string" && value[field] === value.reasoning_content) continue;
+        const title = distinct ? "Reasoning (" + field + ")" : "Reasoning";
+        if (typeof value[field] === "string") part(target, title, value[field]);
+        else if (Array.isArray(value[field])) content(target, value[field], title);
+      }
       if (typeof value.refusal === "string") part(target, "Refusal", value.refusal);
       if (value.audio?.transcript) part(target, "Audio transcript", value.audio.transcript);
       if (Array.isArray(value.tool_calls)) {
@@ -213,13 +218,14 @@
             let state = choices.get(i);
             if (!state) {
               if (choices.size >= 300) { limited = true; break; }
-              state = {text: [], reasoning: [], refusal: [], tools: new Map()}; choices.set(i, state);
+              state = {text: [], reasoning: [], reasoning_content: [], refusal: [], tools: new Map()}; choices.set(i, state);
             }
             if (object(choice.message)) state.message = choice.message;
             if (choice.finish_reason != null) state.finish = choice.finish_reason;
             const delta = object(choice.delta) ? choice.delta : {};
-            for (const [field, target] of [["content", "text"], [typeof delta.reasoning_content === "string" ? "reasoning_content" : "reasoning", "reasoning"], ["refusal", "refusal"]]) {
+            for (const [field, target] of [["content", "text"], ["reasoning_content", "reasoning_content"], ["reasoning", "reasoning"], ["refusal", "refusal"]]) {
               if (typeof delta[field] === "string") state[target].push(delta[field]);
+              else if ((field === "reasoning" || field === "reasoning_content") && delta[field] != null) warn("Structured reasoning deltas remain available in the original payload.");
             }
             const calls = Array.isArray(delta.tool_calls) ? delta.tool_calls : object(delta.function_call) ? [{index: 0, function: delta.function_call}] : [];
             for (const [position, call] of calls.entries()) {
@@ -313,7 +319,7 @@
       } else {
         if (!done) { partial = true; warn("No [DONE] marker was saved; showing collected partial output."); }
         for (const [i, state] of [...choices].sort((a, b) => a[0] - b[0])) {
-          const value = state.message || {role: "assistant", content: state.text.join(""), reasoning_content: state.reasoning.join(""), refusal: state.refusal.join(""), tool_calls: [...state.tools].sort((a, b) => a[0] - b[0]).map(([, t]) => ({id: t.id.join(""), function: {name: t.name.join(""), arguments: t.args.join("")}}))};
+          const value = state.message || {role: "assistant", content: state.text.join(""), reasoning: state.reasoning.join(""), reasoning_content: state.reasoning_content.join(""), refusal: state.refusal.join(""), tool_calls: [...state.tools].sort((a, b) => a[0] - b[0]).map(([, t]) => ({id: t.id.join(""), function: {name: t.name.join(""), arguments: t.args.join("")}}))};
           const target = message(value, choices.size > 1 ? " · choice " + i : "");
           part(target, "Finish reason", label(state.finish));
           if (state.finish == null) { partial = true; warn("A choice has no saved finish reason."); }

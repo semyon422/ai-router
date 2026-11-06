@@ -1209,4 +1209,89 @@ function test.full_payload_storage_matches_client_json_and_sse_for_both_protocol
 	stack.storage:close()
 end
 
+---@param t testing.T
+function test.real_chat_adapter_preserves_reasoning_usage_and_accounting_on_public_endpoint(t)
+	local raw_usage, upstream_body
+	local now = 100
+	local provider = CompatProvider({config = {base_url = "http://fixture/v1", models = {"gpt-6-luna"}},
+		get_time = function() return now end,
+		request = function(_, encoded)
+			upstream_body = json.decode(encoded)
+			return {status = 200, body = json.encode({choices = {{message = {role = "assistant", content = "answer",
+				reasoning = "raw thought", reasoning_content = "legacy thought", provider_metadata = "PRIVATE-METADATA"},
+				finish_reason = "length"}}, usage = raw_usage})}
+		end,
+		open_stream = function()
+			local frames = {
+				{choices = {{delta = {role = "assistant"}}}},
+				{choices = {{delta = {reasoning = "raw ", reasoning_content = "legacy "}}}},
+				{choices = {{delta = {reasoning = "thought", reasoning_content = "thought", content = "answer"}, finish_reason = "length"}}},
+				{choices = json.array(), usage = raw_usage},
+			}
+			local chunks = {}
+			for _, frame in ipairs(frames) do chunks[#chunks + 1] = "data: " .. json.encode(frame) .. "\n\n" end
+			chunks[#chunks + 1] = "data: [DONE]\n\n"
+			return {res = {status = 200}, setTimeout = function() end,
+				sendBody = function(_, encoded) upstream_body = json.decode(encoded) return #encoded end,
+				receiveHeaders = function() return true end,
+				receiveAvailableChunk = function() now = now + 1 return table.remove(chunks, 1) end,
+				close = function() return true end, cancel = function() return true end}
+		end})
+	local stack = startStack({providers = {["openai-1"] = provider}})
+	stack.server.get_time = function() return now end
+	local repo = stack.server.inference.request_logs_repo
+	for _, reasoning in ipairs({false, 0, 3}) do
+		raw_usage = {prompt_tokens = 10, completion_tokens = 7, total_tokens = 17,
+			prompt_tokens_details = {cached_tokens = 0, audio_tokens = 1}}
+		if reasoning ~= false then raw_usage.completion_tokens_details = {reasoning_tokens = reasoning, accepted_prediction_tokens = 0} end
+		for _, mode in ipairs({"json", "sse-hidden-usage", "sse-visible-usage"}) do
+			local stream = mode ~= "json"
+			local include_usage = mode == "sse-visible-usage"
+			local response = request(t, stack, "/v1/chat/completions", {model = "openai-1/gpt-6-luna",
+				messages = {{role = "user", content = "fixture"}}, stream = stream,
+				stream_options = stream and {include_usage = include_usage} or nil}, TOKEN)
+			t:eq(response.status, 200)
+			if stream then
+				t:eq(upstream_body.stream_options.include_usage, true)
+				local events = parseSse(response.body)
+				local raw, legacy, observed_usage, finish = "", "", nil, nil
+				for _, event in ipairs(events) do
+					if type(event.usage) == "table" and event.usage ~= json.null then observed_usage = event.usage end
+					local choice = event.choices[1]
+					if choice then
+						local delta = choice.delta or {}
+						raw = raw .. (delta.reasoning or "")
+						legacy = legacy .. (delta.reasoning_content or "")
+						finish = choice.finish_reason or finish
+					end
+				end
+				t:eq(raw, "raw thought") t:eq(legacy, "legacy thought") t:eq(finish, "length")
+				if include_usage then t:tdeq(observed_usage, raw_usage) else t:eq(observed_usage, nil) end
+			else
+				local completion = json.decode(response.body)
+				local message = completion.choices[1].message
+				t:eq(message.role, "assistant")
+				t:eq(message.reasoning, "raw thought") t:eq(message.reasoning_content, "legacy thought")
+				t:eq(message.usage, nil) t:eq(message.wire_usage, nil) t:eq(message.finish_reason, nil)
+				t:eq(message.provider_metadata, nil)
+				t:eq(completion.choices[1].finish_reason, "length")
+				t:tdeq(completion.usage, raw_usage)
+			end
+			local row = repo:list({user_id = stack.user.id}, os.time())[1]
+			t:eq(row.input_tokens, 10) t:eq(row.output_tokens, 7) t:eq(row.cached_input_tokens, 0)
+			t:eq(row.estimated, false)
+			if stream then t:eq(row.ttft_ms, 2000) end
+			t:eq(repo:getBody(row.id, "response", stack.user.id), response.body)
+			t:eq(json.encode(row):find("raw thought", 1, true), nil)
+		end
+	end
+	local history = stack.usage_repo:history(os.time()).rows
+	t:eq(history[1].requests, 9)
+	t:eq(history[1].output_tokens, 63)
+	t:eq(history[1].input_tokens, 90)
+	t:eq(history[1].estimated_requests, 0)
+	stack.server:stop()
+	stack.storage:close()
+end
+
 return test

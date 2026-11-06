@@ -112,10 +112,31 @@ test('minimal native deltas are grouped provisionally, never claimed as a guaran
   assert.match(view.notices.join(' '), /omit item identity/);
 });
 
-test('reasoning aliases do not duplicate the same reported reasoning', () => {
+test('identical independent reasoning fields are deduplicated only in presentation', () => {
   const raw = frame({choices: [{index: 0, delta: {content: 'OK', reasoning_content: 'Think.', reasoning: 'Think.'}, finish_reason: 'stop'}]}) + frame('[DONE]');
   const view = response(raw);
   assert.equal(text(view).match(/Think\./g).length, 1);
+});
+
+test('different reasoning fields are kept separate in JSON and assembled SSE views', () => {
+  const bodies = [JSON.stringify({choices: [{message: {role: 'assistant', content: 'OK', reasoning: 'Raw thought', reasoning_content: 'Legacy thought'}, finish_reason: 'stop'}]}),
+    frame({choices: [{index: 0, delta: {reasoning: 'Raw ', reasoning_content: 'Legacy '}}]}) +
+    frame({choices: [{index: 0, delta: {content: 'OK', reasoning: 'thought', reasoning_content: 'thought'}, finish_reason: 'stop'}]}) + frame('[DONE]')];
+  for (const raw of bodies) {
+    const view = response(raw);
+    assert.match(text(view), /Reasoning \(reasoning\)\nRaw thought/);
+    assert.match(text(view), /Reasoning \(reasoning_content\)\nLegacy thought/);
+    assert.equal(view.partial, false);
+    assert.equal(text(view).match(/Raw thought/g).length, 1);
+    assert.equal(text(view).match(/Legacy thought/g).length, 1);
+    assert.doesNotMatch(text(view), /Raw Legacy/);
+  }
+});
+
+test('structured reasoning deltas stay raw rather than being coerced into text', () => {
+  const view = response(frame({choices: [{delta: {content: 'OK', reasoning: {encrypted: 'opaque'}}, finish_reason: 'stop'}]}) + frame('[DONE]'));
+  assert.match(view.notices.join(' '), /Structured reasoning/);
+  assert.doesNotMatch(text(view), /object Object|opaque/);
 });
 
 test('native JSON shows output, summary, opaque reasoning notices and failure details', () => {

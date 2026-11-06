@@ -11,6 +11,8 @@
 	const options = [...model.options].map(option => option.value).filter(Boolean);
 	const now = () => performance.now();
 	const modes = ["default", "enabled", "disabled"];
+	const reasoningFields = ["reasoning_content", "reasoning"];
+	const hasReasoning = value => reasoningFields.some(field => typeof value[field] === "string" && value[field].length > 0);
 	const toolSchema = {type: "function", function: {name: "browser_javascript",
 		description: "Run JavaScript for calculations or data processing in an isolated browser worker. Use return for a result or console.log. No page DOM, network, credentials or storage. Each call has a 5-second deadline and 16000-character output limit.",
 		parameters: {type: "object", properties: {code: {type: "string"}}, required: ["code"], additionalProperties: false}}};
@@ -50,6 +52,19 @@
 		details.appendChild(summary); details.appendChild(content); bubble.body.insertBefore(details, bubble.content);
 		return content;
 	};
+	const showReasoning = (bubble, values) => {
+		bubble.reasoningNodes = bubble.reasoningNodes || {};
+		const different = hasReasoning(values) && typeof values.reasoning === "string" && values.reasoning
+			&& typeof values.reasoning_content === "string" && values.reasoning_content && values.reasoning !== values.reasoning_content;
+		for (const field of reasoningFields) {
+			const text = typeof values[field] === "string" ? values[field] : "";
+			if (!text && !bubble.reasoningNodes[field]) continue;
+			const node = bubble.reasoningNodes[field] || (bubble.reasoningNodes[field] = addReasoning(bubble, ""));
+			node.textContent = text;
+			node.parentElement.hidden = !text || (field === "reasoning" && text === values.reasoning_content);
+			node.parentElement.children[0].textContent = different ? "Reasoning (" + field + ")" : "Reasoning";
+		}
+	};
 	const showTools = (bubble, calls) => {
 		if (!bubble.toolsNode) { bubble.toolsNode = element("div", "tool-calls"); bubble.body.appendChild(bubble.toolsNode); }
 		bubble.toolsNode.replaceChildren();
@@ -70,6 +85,7 @@
 		if (stats.channel) parts.push(stats.channel + "/" + stats.upstreamModel);
 		if (usage) {
 			parts.push("in " + usage.input, "out " + usage.output);
+			if (usage.reasoning !== null) parts.push("reasoning " + usage.reasoning);
 			parts.push(usage.cached === null ? "cache —" : "cache " + usage.cached + (usage.input > 0 ? " (" + (usage.cached / usage.input * 100).toFixed(1) + "%)" : ""));
 		} else parts.push("tokens — (not reported)");
 		parts.push("TTFT " + (stats.firstAt === null ? "—" : seconds(stats.firstAt - stats.startedAt)), "total " + seconds(duration));
@@ -83,7 +99,9 @@
 		const finite = n => typeof n === "number" && Number.isFinite(n) && n >= 0;
 		if (!value || !finite(value.prompt_tokens) || !finite(value.completion_tokens)) return null;
 		const cached = value.prompt_tokens_details && value.prompt_tokens_details.cached_tokens;
-		return {input: value.prompt_tokens, output: value.completion_tokens, cached: finite(cached) ? cached : null};
+		const reportedReasoning = value.completion_tokens_details && value.completion_tokens_details.reasoning_tokens;
+		return {input: value.prompt_tokens, output: value.completion_tokens, cached: finite(cached) ? cached : null,
+			reasoning: finite(reportedReasoning) ? reportedReasoning : null};
 	};
 	const setBusy = busy => {
 		send.disabled = !model.value; send.textContent = busy ? "Stop" : "Send";
@@ -113,7 +131,10 @@
 			const item = {role: raw.role, content: raw.content.slice(0, maxContent)};
 			if (item.role === "user") { if (pending.length) break; if (item.content) history.push(item); }
 			else if (item.role === "assistant" && history.length && !pending.length) {
-				if (typeof raw.reasoning_content === "string") item.reasoning_content = raw.reasoning_content.slice(0, maxContent);
+				for (const field of reasoningFields) {
+					if (typeof raw[field] === "string") item[field] = raw[field].slice(0, maxContent);
+					else if (raw[field] === null) item[field] = null;
+				}
 				if (Array.isArray(raw.tool_calls) && raw.tool_calls.length > 0 && raw.tool_calls.length <= maxTools) {
 					const ids = new Set();
 					const valid = raw.tool_calls.every(call => call && typeof call.id === "string" && call.id.length > 0 && call.id.length <= 200
@@ -124,7 +145,7 @@
 					item.tool_calls = raw.tool_calls.map(call => ({id: call.id, type: "function", function: {name: call.function.name, arguments: call.function.arguments}}));
 					pending = item.tool_calls.map(call => call.id);
 				}
-				if (item.content.trim() || item.reasoning_content || item.tool_calls) history.push(item);
+				if (item.content.trim() || hasReasoning(item) || item.tool_calls) history.push(item);
 			} else if (item.role === "tool" && pending.includes(raw.tool_call_id)) {
 				item.tool_call_id = raw.tool_call_id; pending = pending.filter(id => id !== item.tool_call_id); history.push(item);
 			}
@@ -134,9 +155,9 @@
 		trimHistory();
 		for (const item of history) {
 			const bubble = addMessage(item.role, item.content);
-			if (item.reasoning_content) addReasoning(bubble, item.reasoning_content);
+			showReasoning(bubble, item);
 			if (item.tool_calls) showTools(bubble, item.tool_calls);
-			if (item.role === "assistant" && !item.content.trim() && (item.reasoning_content || item.tool_calls)) bubble.content.hidden = true;
+			if (item.role === "assistant" && !item.content.trim() && (hasReasoning(item) || item.tool_calls)) bubble.content.hidden = true;
 		}
 	};
 
@@ -144,7 +165,8 @@
 		const bubble = addMessage("assistant"), info = (config.modelInfo || {})[turn.model] || {};
 		const stats = {model: turn.model, kind: info.kind, channel: info.channel, upstreamModel: info.upstreamModel,
 			startedAt: now(), endedAt: 0, firstAt: null, usage: null, finishReason: "", id: "", state: "receiving"};
-		let text = "", thought = "", thoughtNode = null, done = false, failed = false;
+		let text = "", done = false, failed = false;
+		const thoughts = {};
 		const calls = [];
 		const fail = message => { failed = true; errorLine.textContent = message; };
 		const output = () => { if (stats.firstAt === null) stats.firstAt = now(); };
@@ -161,19 +183,21 @@
 			if (!choice) return;
 			if (typeof choice.finish_reason === "string") stats.finishReason = choice.finish_reason.slice(0, 80);
 			const delta = choice.delta || {};
-			for (const [field, value] of [["content", delta.content], ["reasoning", delta.reasoning_content]]) {
-				if (typeof value !== "string" || !value) continue;
+			if (typeof delta.content === "string" && delta.content) {
 				output();
-				if (field === "content") {
-					if (text.length + value.length > maxContent) throw new Error("Reply exceeded the browser content limit.");
-					text += value; bubble.content.textContent = visibleText(text);
-				} else {
-					if (thought.length + value.length > maxContent) throw new Error("Reasoning exceeded the browser content limit.");
-					thought += value;
-					if (!thoughtNode) thoughtNode = addReasoning(bubble, "");
-					thoughtNode.textContent = thought;
-				}
+				if (text.length + delta.content.length > maxContent) throw new Error("Reply exceeded the browser content limit.");
+				text += delta.content; bubble.content.textContent = visibleText(text);
 			}
+			for (const field of reasoningFields) {
+				const value = delta[field];
+				if (typeof value === "string") {
+					if (value) output();
+					const previous = typeof thoughts[field] === "string" ? thoughts[field] : "";
+					if (previous.length + value.length > maxContent) throw new Error("Reasoning exceeded the browser content limit.");
+					thoughts[field] = previous + value;
+				} else if (value === null) thoughts[field] = null;
+			}
+			showReasoning(bubble, thoughts);
 			if (Array.isArray(delta.tool_calls)) {
 				for (const part of delta.tool_calls) {
 					if (!Number.isInteger(part.index) || part.index < 0 || part.index >= maxTools) throw new Error("Too many or invalid tool calls.");
@@ -228,7 +252,7 @@
 			if (reader && reader.cancel) { try { await reader.cancel(); } catch (_) {} }
 			stats.endedAt = now(); stats.state = turn.controller.signal.aborted ? "stopped" : failed ? "failed" : "complete";
 			updateStats(bubble, stats);
-			if (!text.trim() && (thought || calls.length)) bubble.content.hidden = true;
+			if (!text.trim() && (hasReasoning(thoughts) || calls.length)) bubble.content.hidden = true;
 		}
 		const ids = new Set();
 		const validCalls = calls.length && Array.from(calls).every(call => call && call.id && !ids.has(call.id) && ids.add(call.id) && call.function.name);
@@ -236,12 +260,12 @@
 		if (calls.length && !toolCalls.length && !turn.controller.signal.aborted && !failed) {
 			fail("Incomplete or invalid tool call; nothing was executed."); stats.state = "failed"; updateStats(bubble, stats);
 		}
-		if (!text.trim() && !thought && !calls.length) {
+		if (!text.trim() && !hasReasoning(thoughts) && !calls.length) {
 			bubble.node.remove();
 			if (!failed && !turn.controller.signal.aborted) fail("No reply was received.");
 		}
-		const record = text.trim() || thought || toolCalls.length ? {role: "assistant", content: text} : null;
-		if (record && thought) record.reasoning_content = thought;
+		const record = text.trim() || hasReasoning(thoughts) || toolCalls.length ? {role: "assistant", content: text} : null;
+		if (record) for (const field of reasoningFields) if (Object.prototype.hasOwnProperty.call(thoughts, field)) record[field] = thoughts[field];
 		if (record && toolCalls.length) record.tool_calls = toolCalls;
 		return {record, calls: toolCalls, complete: done && !failed && !turn.controller.signal.aborted};
 	};

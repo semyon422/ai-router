@@ -404,4 +404,40 @@ function test.zai_usage_reports_http_and_invalid_responses(t)
 	t:eq(missing_error.code, "invalid_response")
 end
 
+---@param t testing.T
+function test.chat_adapters_keep_reasoning_fields_and_reported_usage_separate(t)
+	local raw_usage = {prompt_tokens = 10, completion_tokens = 7, total_tokens = 17,
+		prompt_tokens_details = {cached_tokens = 0, audio_tokens = 1},
+		completion_tokens_details = {reasoning_tokens = 3, rejected_prediction_tokens = 0}}
+	local tool_calls = {{id = "c1", type = "function", ["function"] = {name = "inspect", arguments = "{}"}}}
+	for _, kind in ipairs({"compat", "zai"}) do
+		local options = {get_time = function() return 0 end,
+			config = kind == "zai" and zai_config or {base_url = "http://fixture/v1", models = {"glm-5.3"}},
+			request = function() return {status = 200, body = json.encode({choices = {{message = {
+				role = "assistant", content = json.null, reasoning = "raw thought", reasoning_content = "legacy thought",
+				refusal = json.null, tool_calls = tool_calls}, finish_reason = "stop"}}, usage = raw_usage})} end,
+			open_stream = fakeOpenStream({
+				json.encode({choices = {{delta = {reasoning = "raw ", reasoning_content = "legacy "}}}}),
+				json.encode({choices = {{delta = {reasoning = "thought", reasoning_content = "thought", refusal = json.null,
+					tool_calls = {{index = 0, id = "c1", type = "function", ["function"] = {name = "inspect", arguments = "{}"}}}}, finish_reason = "stop"}}}),
+				json.encode({choices = json.array(), usage = raw_usage}), "[DONE]",
+			})}
+		local provider = (kind == "zai" and ZaiProvider or CompatProvider)(options)
+		local body = requestBody('{"model":"glm-5.3","messages":[{"role":"user","content":"fixture"}]}')
+		for _, stream in ipairs({false, true}) do
+			body.stream = stream
+			local message
+			if stream then message = assert(provider:completeStream(body, "glm-5.3", function() end))
+			else message = assert(provider:complete(body, "glm-5.3")) end
+			t:eq(message.reasoning, "raw thought")
+			t:eq(message.reasoning_content, "legacy thought")
+			t:eq(message.refusal, json.null)
+			t:tdeq(message.tool_calls, tool_calls)
+			t:eq(message.finish_reason, "stop")
+			t:tdeq(message.wire_usage, raw_usage)
+			t:tdeq(message.usage, {input_tokens = 10, output_tokens = 7, cached_input_tokens = 0})
+		end
+	end
+end
+
 return test

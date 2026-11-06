@@ -49,7 +49,7 @@
         if (card.parts.length === 0) article.append(node("p", "No text content.", "muted"));
         for (const part of card.parts) {
           const text = node("pre", part.text, part.code ? "request-message-code" : "request-message-text");
-          if (part.title === "Reasoning" || part.title === "Summary") {
+          if (/^Reasoning(?: \(|$)/.test(part.title) || part.title === "Summary") {
             const disclosure = node("details");
             disclosure.append(node("summary", part.title), text);
             article.append(disclosure);
