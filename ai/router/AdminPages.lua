@@ -43,7 +43,7 @@ function AdminPages:new(options)
 	self.stylesheet = io_util.read_file(admin_dir .. "/dashboard.css")
 	self.overview_script = io_util.read_file(admin_dir .. "/overview.js")
 	self.usage_script = io_util.read_file(admin_dir .. "/usage.js")
-	self.request_script = io_util.read_file(admin_dir .. "/request.js")
+	self.request_script = io_util.read_file(admin_dir .. "/request-view.js") .. "\n" .. io_util.read_file(admin_dir .. "/request.js")
 	self.theme_script = io_util.read_file(admin_dir .. "/theme.js")
 	self.templates = {}
 	for _, name in ipairs({"layout", "home", "overview", "users", "channels", "models", "usage", "requests", "request"}) do

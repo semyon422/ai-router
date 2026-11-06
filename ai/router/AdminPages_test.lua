@@ -827,4 +827,25 @@ function test.request_detail_previews_are_bounded_and_eviction_and_role_changes_
 	stack:close()
 end
 
+function test.request_reader_exposes_protocol_flags_and_keeps_original_views(t)
+	local stack = Stack()
+	local owner = stack.users:create("reader-owner", os.time())
+	local cookie = login(t, stack)
+	local raw = '{"input":"Hello"}'
+	local id = detailedRequest(stack, owner, raw)
+	stack.storage.models.router_request_logs:update({protocol = "responses"}, {id = id})
+	stack.storage.db:query([[UPDATE router_request_details SET response_complete=0, response_truncated=1,
+		capture_failed=1, request_state='partial' WHERE request_id=?]], {id})
+	local response = request(t, stack, "GET", "/requests/" .. id, nil, cookie)
+	t:eq(response.status, 200)
+	for _, value in ipairs({'data-side="request"', 'data-side="response"', 'data-protocol="responses"',
+		'data-transport-complete="false"', 'data-request-state="partial"', 'data-capture-failed="true"',
+		'data-truncated="true"', 'data-readable hidden', 'data-raw open', 'Original JSON / SSE', 'RouterRequestView'}) do
+		t:assert(response.body:find(value, 1, true), value)
+	end
+	response = request(t, stack, "GET", "/requests/" .. id .. "/request?download=1", nil, cookie)
+	t:eq(response.body, raw)
+	stack:close()
+end
+
 return test

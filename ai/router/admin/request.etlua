@@ -26,14 +26,17 @@ local total = details[side .. "_bytes"]
 local truncated = details[side .. "_truncated"]
 local url = "/requests/" .. id .. "/" .. side
 %>
-<section class="request-payload" data-payload data-url="<%= url %>" data-complete="<%= #preview == saved and 'true' or 'false' %>">
+<section class="request-payload" data-payload data-url="<%= url %>" data-side="<%= side %>" data-protocol="<%= row.protocol %>" data-complete="<%= #preview == saved and 'true' or 'false' %>" data-truncated="<%= truncated and 'true' or 'false' %>" data-transport-complete="<%= details.response_complete and 'true' or 'false' %>" data-request-state="<%= details.request_state %>" data-capture-failed="<%= details.capture_failed and 'true' or 'false' %>">
 <div class="section-heading"><h2><%= side == "request" and "Request body" or "Response body" %></h2><div class="request-payload-actions">
 <% if #preview < saved then %><button type="button" data-load hidden>Load full body</button><% end %>
-<button type="button" data-format hidden>Format JSON/SSE</button>
 <a href="<%= url %>?download=1">Download saved body</a></div></div>
 <p class="muted" data-status role="status"><%= saved %> saved bytes / <%= total %> observed bytes.<% if #preview < saved then %> Preview: first <%= #preview %> bytes. Load or download to see the rest.<% end %></p>
 <% if truncated then %><p class="error">Truncated at the 16 MiB storage limit. The omitted bytes were not saved and cannot be recovered here.</p><% end %>
+<div class="request-readable" data-readable hidden></div>
+<details class="request-original" data-raw open><summary>Original JSON / SSE</summary>
+<button type="button" data-format hidden>Format JSON/SSE</button>
 <pre tabindex="0" aria-label="<%= side %> payload" data-body><span><%= preview %></span></pre>
+</details>
 </section>
 <% end %>
 <% end %>

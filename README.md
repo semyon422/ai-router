@@ -59,7 +59,9 @@ Deploys to `/home/semyon422/ai-router` on the VPS, one `ai-router` compose servi
   preserves accounts/roles/history and adds full request details.
 - **Sensitive payload storage:** the last ten completed inference requests per account
   retain original request and JSON/SSE response bodies, up to 16 MiB each, until
-  replaced (no age limit). Owners and admins can inspect them at `/requests/<id>`.
+  replaced (no age limit). Owners and admins can inspect readable messages and
+  assembled streaming replies at `/requests/<id>`, with original JSON/SSE and
+  exact downloads retained.
   Headers/credentials are not collected, but secrets pasted into messages are not
   redacted. Protect the database, WAL/SHM and backups; rotation is logical deletion,
   not cryptographic erasure, and does not purge existing backups.

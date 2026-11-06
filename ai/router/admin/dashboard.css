@@ -182,6 +182,15 @@ button:disabled { cursor: default; opacity: 0.55; }
 .request-payload .section-heading { flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
 .request-payload-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .request-payload pre { max-height: 65vh; overflow: auto; padding: 16px; background: var(--raised); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 2; }
+.request-original { margin-top: 20px; }
+.request-original > summary { cursor: pointer; color: var(--accent); font-weight: 600; margin-bottom: 12px; }
+.request-readable { margin-top: 20px; }
+.request-message { margin: 14px 0; padding: 16px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; }
+.request-message h3 { margin: 0 0 12px; font-size: 14px; }
+.request-message h4 { margin: 12px 0 4px; font-size: 11px; color: var(--muted); font-weight: 600; }
+.request-message pre.request-message-text { font: inherit; line-height: 1.65; background: transparent; padding: 0; margin: 0; }
+.request-message summary { cursor: pointer; color: var(--muted); margin: 10px 0; }
+.request-message pre.request-message-code { margin: 6px 0; }
 footer { margin-top: 32px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
 .skip-link { position: absolute; left: 16px; top: -100px; padding: 10px; background: var(--panel); z-index: 2; }
 .skip-link:focus { top: 12px; }

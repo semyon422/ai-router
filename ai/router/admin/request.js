@@ -19,6 +19,50 @@
     let complete = section.dataset.complete === "true";
     let formatted = false;
     let loading = false;
+    const readable = section.querySelector("[data-readable]");
+    const original = section.querySelector("[data-raw]");
+    function renderReadable() {
+      if (!readable || !window.RouterRequestView) return;
+      let view;
+      try {
+        view = window.RouterRequestView.parse(raw, {
+          side: section.dataset.side, protocol: section.dataset.protocol, bodyComplete: complete,
+          truncated: section.dataset.truncated === "true", transportComplete: section.dataset.transportComplete !== "false",
+          requestState: section.dataset.requestState, captureFailed: section.dataset.captureFailed === "true",
+        });
+      } catch (_) {
+        view = {cards: [], notices: ["Readable view could not be built. The original payload remains available."], partial: true, recognized: false, streaming: false};
+      }
+      const children = [];
+      function node(tag, text, className) {
+        const element = document.createElement(tag);
+        if (text !== undefined) element.textContent = text;
+        if (className) element.className = className;
+        return element;
+      }
+      const title = !complete ? "Readable view · full body not loaded" : section.dataset.side === "request" ? "Readable request" : view.streaming ? "Assembled streaming response" : "Readable response";
+      children.push(node("h3", title + (complete && view.partial ? " · partial" : view.streaming ? " · complete" : "")));
+      for (const notice of view.notices) children.push(node("p", notice, "muted"));
+      for (const card of view.cards) {
+        const article = node("article", undefined, "request-message");
+        article.append(node("h3", card.title));
+        if (card.parts.length === 0) article.append(node("p", "No text content.", "muted"));
+        for (const part of card.parts) {
+          const text = node("pre", part.text, part.code ? "request-message-code" : "request-message-text");
+          if (part.title === "Reasoning" || part.title === "Summary") {
+            const disclosure = node("details");
+            disclosure.append(node("summary", part.title), text);
+            article.append(disclosure);
+          } else article.append(node("h4", part.title), text);
+        }
+        children.push(article);
+      }
+      if (view.recognized && view.cards.length === 0) children.push(node("p", "No readable messages or text were returned. Other data remains in the original payload.", "muted"));
+      readable.replaceChildren(...children);
+      readable.hidden = false;
+      if (original) original.open = !view.recognized || !complete;
+    }
+    renderReadable();
     function resetFormat() {
       formatted = false;
       format.textContent = "Format JSON/SSE";
@@ -63,6 +107,7 @@
         raw = text;
         pre.textContent = raw;
         complete = true;
+        renderReadable();
         load.hidden = true;
         status.textContent = "Full saved body loaded. A storage-limit truncation warning still applies, if shown.";
       } catch (_) {
