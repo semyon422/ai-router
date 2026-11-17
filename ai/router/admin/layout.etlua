@@ -1,3 +1,19 @@
+<%
+local icons = {
+ Home = "m3 10 9-7 9 7v11H3Zm6 11v-8h6v8",
+ Chat = "M20 11a8 8 0 0 1-8 8H5l-3 3V11a9 9 0 1 1 18 0ZM7 10h8m-8 4h5",
+ Requests = "M5 3h14v18H5ZM8 8h8m-8 4h8m-8 4h5",
+ Overview = "M3 3h7v7H3Zm11 0h7v7h-7ZM3 14h7v7H3Zm11 0h7v7h-7Z",
+ Channels = "M4 5h16M5 5l7 14 7-14M3 3h4v4H3Zm14 0h4v4h-4ZM10 17h4v4h-4Z",
+ Usage = "M4 3v17h17M8 15l4-6 4 3 5-7",
+ Models = "M5 3v5m0 6v7m7-18v11m0 5v2m7-18v2m0 6v10M2 8h6m1 6h6m1-9h6",
+ Users = "M12 8a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM3 21v-3a6 6 0 0 1 12 0v3m3-16a3 3 0 0 1 0 6m1 4a5 5 0 0 1 3 5",
+}
+local navigation = {{"Home", "/"}, {"Chat", "/chat"}, {"Requests", "/requests"}}
+if user.role == "admin" then
+ for _, item in ipairs({{"Overview", "/overview"}, {"Channels", "/channels"}, {"Usage", "/usage"}, {"Models", "/models"}, {"Users", "/users"}}) do table.insert(navigation, item) end
+end
+%>
 <!doctype html>
 <html lang="en">
 <head>
@@ -9,30 +25,27 @@
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
+<div class="shell">
+<nav class="sidebar" aria-label="Main navigation">
+<a class="brand" href="/" aria-label="AI Router home"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M7 6h10M6 8l5 8m7-8-5 8"/></svg></span><span>AI Router</span></a>
+<% for index, item in ipairs(navigation) do %>
+<% if index == 1 or index == 4 then %><p class="eyebrow"><%= index == 1 and "Workspace" or "Administration" %></p><% end %>
+<a class="nav-link" href="<%= item[2] %>"<% if title == item[1] or item[1] == "Requests" and title:match("^Request #%d+$") then %> aria-current="page"<% end %> aria-label="<%= item[1] %>"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="<%= icons[item[1]] %>"/></svg><span><%= item[1] %></span></a>
+<% end %>
+<div class="sidebar-note"><% if user.role == "admin" then %><p>Manage through MCP.<br>Credentials stay off this dashboard.</p><% else %><p>Your workspace.<br>Your chat and request history.</p><% end %></div>
+</nav>
+<div class="workspace<% if title == "Chat" then %> chat-workspace<% end %>">
 <header class="topbar">
-<a class="brand" href="/"><span class="brand-mark" aria-hidden="true">R</span>AI Router</a>
+<div class="breadcrumb"><span>Workspace / </span><strong><%= title %></strong></div>
 <div class="toolbar">
 <span class="chat-user"><%= user.name %></span>
-<label class="theme-control">Theme <select id="theme" aria-label="Color theme"><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
+<label class="theme-control"><span>Theme</span> <select id="theme" aria-label="Color theme"><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
 <form class="inline" method="post" action="/logout">
 <input type="hidden" name="csrf_token" value="<%= csrf_token %>">
 <button class="quiet" type="submit">Sign out</button>
 </form>
 </div>
 </header>
-<div class="shell">
-<nav class="sidebar" aria-label="Main navigation">
-<p class="eyebrow">Workspace</p>
-<a href="/"<% if title == "Home" then %> aria-current="page"<% end %>>Home</a>
-<a href="/chat"<% if title == "Chat" then %> aria-current="page"<% end %>>Chat</a>
-<a href="/requests"<% if title == "Requests" or title:match("^Request #%d+$") then %> aria-current="page"<% end %>>Requests</a>
-<% if user.role == "admin" then %>
-<% for _, item in ipairs({{"Overview", "overview"}, {"Channels", "channels"}, {"Usage", "usage"}, {"Models", "models"}, {"Users", "users"}}) do %>
-<a href="/<%= item[2] %>"<% if title == item[1] then %> aria-current="page"<% end %>><%= item[1] %></a>
-<% end %>
-<div class="sidebar-note"><span class="badge">Read-only dashboard</span><p>Manage your router through MCP. Credentials stay off this dashboard.</p></div>
-<% end %>
-</nav>
 <main id="main" tabindex="-1"<% if title == "Chat" then %> class="chat-main"<% end %>>
 <% if title == "Chat" then %>
 <%- content %>
@@ -48,6 +61,7 @@
 <% if title ~= "Home" then %><footer><%= title == "Overview" and "Overview updates every 30 seconds while this tab is visible. Without JavaScript, reload for new data." or "Snapshot from this page load. Reload to see the latest data." %><% if user.role == "admin" then %> Quotas never change routing.<% end %></footer><% end %>
 <% end %>
 </main>
+</div>
 </div>
 <% if page_script and page_script ~= "" then %><script><%- page_script %></script><% end %>
 </body>

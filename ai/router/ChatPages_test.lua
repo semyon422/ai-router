@@ -289,6 +289,28 @@ function test.login_page_then_session_and_model_list(t)
 end
 
 ---@param t testing.T
+function test.workspace_uses_shared_theme_and_single_accessible_settings_panel(t)
+	local stack = startStack()
+	local login_page = request(t, stack, "/login")
+	t:assert(login_page.body:find('--accent: #405ddb', 1, true))
+	t:assert(login_page.body:find('id="theme" aria-label="Color theme"', 1, true))
+	local cookie = signIn(t, stack, TOKEN)
+	local response = request(t, stack, "/chat", nil, {cookie = cookie})
+	for _, text in ipairs({'class="workspace chat-workspace"', 'aria-label="Main navigation"',
+		'aria-label="Chat"', 'aria-controls="chat-settings-dialog"',
+		'<dialog id="chat-settings-dialog"', 'aria-labelledby="chat-settings-title"',
+		'id="chat-empty"', 'id="chat-model-label"', 'id="chat-input" rows="2" aria-label="Message"'}) do
+		t:assert(response.body:find(text, 1, true), text)
+	end
+	for _, id in ipairs({"chat-model", "chat-system", "chat-reasoning", "chat-tools"}) do
+		local _, count = response.body:gsub('id="' .. id:gsub("%-", "%%-") .. '"', "")
+		t:eq(count, 1)
+	end
+	t:eq(response.body:find("DEMO DATA", 1, true), nil)
+	stop(stack)
+end
+
+---@param t testing.T
 function test.native_and_ungranted_models_are_excluded_and_rejected(t)
 	local native = fakeProvider({message = ok_message})
 	local zai = fakeProvider({message = ok_message})

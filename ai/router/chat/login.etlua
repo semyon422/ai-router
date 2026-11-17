@@ -9,7 +9,8 @@
 </head>
 <body class="login-page">
 <main class="login-card">
-<div class="brand"><span class="brand-mark" aria-hidden="true">R</span>AI Router</div>
+<div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M7 6h10M6 8l5 8m7-8-5 8"/></svg></span>AI Router</div>
+<div class="login-theme"><label class="theme-control"><span>Theme</span> <select id="theme" aria-label="Color theme"><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label></div>
 <h1>Your AI workspace.</h1>
 <p class="muted">Sign in with your API key to open chat and request history.</p>
 <% if error_message then %><div class="notice" role="alert"><%= error_message %></div><% end %>

@@ -40,6 +40,8 @@
 		return node;
 	};
 	const addMessage = (role, text = "") => {
+		const empty = get("chat-empty");
+		if (empty) empty.hidden = true;
 		const node = element("div", "msg " + role);
 		const meta = element("div", "meta", role === "user" ? "You" : role === "tool" ? "JavaScript result" : "Assistant");
 		const body = element("div", "body"), content = element("div", "content", role === "assistant" ? visibleText(text) : text);
@@ -110,6 +112,8 @@
 		model.disabled = busy || options.length === 0;
 	};
 	const hint = () => {
+		const label = get("chat-model-label");
+		if (label) label.textContent = model.value || "No models available";
 		if (!reasoningHint) return;
 		const info = (config.modelInfo || {})[model.value];
 		reasoningHint.textContent = info && info.kind === "zai"
@@ -316,7 +320,10 @@
 	input.addEventListener("keydown", event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); run(); } });
 	reset.addEventListener("click", () => {
 		if (active) return;
-		history = []; messages.replaceChildren(); input.value = ""; errorLine.textContent = ""; status.textContent = "New conversation. Settings kept."; save();
+		const empty = get("chat-empty");
+		history = []; messages.replaceChildren();
+		if (empty) { empty.hidden = false; messages.appendChild(empty); }
+		input.value = ""; errorLine.textContent = ""; status.textContent = "New conversation. Settings kept."; save();
 	});
 	model.addEventListener("change", () => { hint(); save(); });
 	system.addEventListener("input", save); reasoning.addEventListener("change", save);

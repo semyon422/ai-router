@@ -41,7 +41,7 @@ function element(tag = 'div') {
 	return node;
 }
 
-function start(saved, {userId = 1, storage = {}, runJavaScript, modelInfo = {}} = {}) {
+function start(saved, {userId = 1, storage = {}, runJavaScript, modelInfo = {}, presentation = false} = {}) {
 	if (saved) storage['ai-router-chat:' + userId] = saved;
 	const elements = {
 		'chat-model': {
@@ -68,6 +68,11 @@ function start(saved, {userId = 1, storage = {}, runJavaScript, modelInfo = {}} 
 		'chat-status': element('p'),
 		'chat-reasoning-hint': element('p'),
 	};
+	if (presentation) {
+		elements['chat-empty'] = element('div');
+		elements['chat-model-label'] = element('p');
+		elements['chat-messages'].appendChild(elements['chat-empty']);
+	}
 	const document = {
 		hidden: false,
 		getElementById: id => elements[id],
@@ -609,6 +614,21 @@ test('Stop cancels a running tool, persists a closed exchange and prevents follo
 	const saved = JSON.parse(view.storage['ai-router-chat:1']).messages;
 	assert.equal(saved[2].role, 'tool'); assert.match(saved[2].content, /cancelled/);
 	assert.match(view.elements['chat-status'].textContent, /Stopped/);
+});
+
+test('presentation shows the actual selected model and reset restores the welcome state', () => {
+	const view = start(JSON.stringify({model: 'zai-1/glm-5.3', messages: [
+		{role: 'user', content: 'Stored question'}, {role: 'assistant', content: 'Stored answer'},
+	]}), {presentation: true});
+	assert.equal(view.elements['chat-empty'].hidden, true);
+	assert.equal(view.elements['chat-model-label'].textContent, 'zai-1/glm-5.3');
+	view.elements['chat-model'].value = 'openai-1/gpt-6-luna'; view.modelChange();
+	assert.equal(view.elements['chat-model-label'].textContent, 'openai-1/gpt-6-luna');
+	view.elements['chat-reset'].listeners.click();
+	assert.equal(view.elements['chat-empty'].hidden, false);
+	assert.deepEqual(view.elements['chat-messages'].children, [view.elements['chat-empty']]);
+	assert.deepEqual(JSON.parse(view.storage['ai-router-chat:1']).messages, []);
+	assert.equal(view.requests.length, 0);
 });
 
 test('incomplete streams and oversized tool calls never execute code', async () => {

@@ -1,38 +1,39 @@
-<div class="chat-model-bar">
-<label for="chat-model">Model</label>
-<select id="chat-model"<% if #models == 0 then %> disabled<% end %>>
-<% if #models == 0 then %>
-<option value="">None available</option>
-<% else %>
-<% for _, model in ipairs(models) do %>
-<option value="<%= model %>"><%= model %></option>
-<% end %>
-<% end %>
-</select>
-<button id="chat-reset" type="button">New chat</button>
-<% if #models == 0 then %><span class="muted">Ask your operator to grant you a model on a GLM or compatible channel.</span><% end %>
-</div>
-<details class="chat-settings">
-<summary>Settings · system prompt, reasoning, tools</summary>
-<label for="chat-system">System prompt</label>
-<textarea id="chat-system" rows="3" maxlength="100000" placeholder="Instructions sent before the conversation"></textarea>
-<div class="chat-settings-controls">
-<label>Reasoning <select id="chat-reasoning"><option value="default">Provider default</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select></label>
-<label><input id="chat-tools" type="checkbox"> Automatic JavaScript tool</label>
-</div>
-<p id="chat-reasoning-hint" class="muted"></p>
-<p class="muted">JavaScript runs in an isolated worker: no page DOM, credentials, storage, or network. Five seconds per call, four calls per step, six inference requests per turn. It is off after every page reload. Outputs are sent back to the model. There is no browser memory quota; only enable it for sessions you trust.</p>
-<p class="muted">New chat clears the conversation, not these settings. Editing the system prompt changes subsequent requests in this conversation.</p>
-</details>
-<div id="chat-messages" class="chat-messages">
+<header class="chat-heading">
+<div><h1>Chat</h1><p id="chat-model-label" class="muted"><%= models[1] or "No models available" %></p></div>
+<div class="chat-heading-actions"><button id="chat-settings-open" type="button" aria-haspopup="dialog" aria-controls="chat-settings-dialog" aria-expanded="false" hidden>Settings</button><button id="chat-reset" type="button">New chat</button></div>
+</header>
+<div class="chat-frame">
+<section class="chat-conversation" aria-label="Conversation">
+<div id="chat-messages" class="chat-messages" role="log" aria-label="Messages" aria-live="off">
 <% if #models == 0 then %>
 <div class="notice">No Chat Completions models are available to you yet. Models served only through the native Responses protocol cannot be used in this web chat.</div>
+<% else %>
+<div id="chat-empty" class="chat-empty"><span class="eyebrow">Your workspace</span><h2>More room to think.</h2><p>Ask a question or describe a task.<br>Choose a model and tune the session in Settings.</p></div>
 <% end %>
 </div>
-<p id="chat-error" class="error" role="status"></p>
+<div class="chat-compose-area">
+<p id="chat-error" class="error" role="alert"></p>
 <div class="chat-composer">
-<textarea id="chat-input" rows="2" placeholder="Message — Enter to send, Shift+Enter for a new line"<% if #models == 0 then %> disabled<% end %>></textarea>
-<button id="chat-send" type="button"<% if #models == 0 then %> disabled<% end %>>Send</button>
+<textarea id="chat-input" rows="2" aria-label="Message" placeholder="Ask a question or describe a task…"<% if #models == 0 then %> disabled<% end %>></textarea>
+<div class="chat-composer-actions"><span class="muted">Enter to send · Shift+Enter for a new line</span><button id="chat-send" type="button"<% if #models == 0 then %> disabled<% end %>>Send</button></div>
 </div>
 <p id="chat-status" class="chat-status muted" role="status"></p>
-<p class="chat-hint">Timing and tokens/s are browser-observed, including network/relay latency; tokens are provider-reported when available. GLM and compatible models only. Conversations and settings are browser-local; the server also retains the last ten inference requests and replies per account, visible to you and administrators.</p>
+<details class="chat-help"><summary>Privacy, metrics &amp; limits</summary><p>Timing and tokens/s are browser-observed, including network/relay latency; tokens are provider-reported when available. GLM and compatible models only. Conversations and settings are browser-local; the server also retains the last ten inference requests and replies per account, visible to you and administrators.</p></details>
+</div>
+</section>
+<aside class="chat-settings" id="chat-settings" aria-labelledby="chat-settings-title">
+<header class="chat-settings-heading"><h2 id="chat-settings-title">Session settings</h2><button id="chat-settings-close" type="button" aria-label="Close settings" hidden>Close</button></header>
+<div class="chat-setting"><label for="chat-model">Model</label>
+<select id="chat-model"<% if #models == 0 then %> disabled<% end %>>
+<% if #models == 0 then %><option value="">None available</option><% else %>
+<% for _, model in ipairs(models) do %><option value="<%= model %>"><%= model %></option><% end %>
+<% end %>
+</select>
+<% if #models == 0 then %><p class="muted">Ask your operator to grant you a model on a GLM or compatible channel.</p><% end %>
+</div>
+<div class="chat-setting"><label for="chat-reasoning">Reasoning</label><select id="chat-reasoning"><option value="default">Provider default</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select><p id="chat-reasoning-hint" class="muted"></p></div>
+<div class="chat-setting"><label for="chat-system">System prompt</label><textarea id="chat-system" rows="4" maxlength="100000" placeholder="Instructions sent before the conversation"></textarea><p class="muted">Changes apply to subsequent requests. New chat keeps these settings.</p></div>
+<div class="chat-setting"><label class="chat-tool-toggle"><span>JavaScript tools</span><input id="chat-tools" type="checkbox"></label><p class="muted">Off after every reload. Outputs are sent back to the model.</p><details class="chat-tool-help"><summary>Sandbox &amp; execution limits</summary><p>JavaScript runs in an isolated worker: no page DOM, credentials, storage, or network. Five seconds per call, four calls per step, six inference requests per turn. There is no browser memory quota; only enable it for sessions you trust.</p></details></div>
+</aside>
+</div>
+<dialog id="chat-settings-dialog" class="chat-settings-dialog" aria-labelledby="chat-settings-title"></dialog>

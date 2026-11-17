@@ -26,11 +26,13 @@ local error_descriptions = {
 <datalist id="request-<%= entry[1] %>"><% for _, value in ipairs(options[entry[2]]) do %><option value="<%= value %>"></option><% end %></datalist>
 <% end %>
 </form>
-<p class="muted filter-help">Exact matches. Suggestions include up to 100 names per field from retained history, including renamed or deleted entries; you can type any full name. Applying or removing a filter starts at its latest results.</p>
+<details class="request-filter-help"><summary>About filters, history &amp; saved payloads</summary>
+<p>Exact matches. Suggestions include up to 100 names per field from retained history, including renamed or deleted entries; you can type any full name. Applying or removing a filter starts at its latest results.</p>
+<p>Last <%= retention_days %> days, up to <%= max_rows %> metadata-only entries, plus the last ten detailed requests of each account regardless of age. Click a linked ID to view saved request/response bodies (up to 16 MiB each). Completion-order IDs, newest first; timestamps show request start in the server timezone.</p>
+</details>
 <% if #active_filters > 0 then %><nav class="filter-chips" aria-label="Active filters"><% for _, filter in ipairs(active_filters) do %><a href="<%= filter.remove_url %>" aria-label="Remove <%= filter.label %> filter: <%= filter.value %>"><span><%= filter.label %>: <strong><%= filter.value %></strong></span><span aria-hidden="true">×</span></a><% end %></nav><% end %>
 <div class="section-heading request-heading"><div><h2><%= filters.before and "Older results" or "Latest requests" %></h2><p class="muted">Showing <%= #rows %> completed requests · up to <%= page_size %> per page.</p></div>
 <nav class="request-pagination" aria-label="Request pages"><a href="<%= latest_url %>">Latest</a><% if older_url then %><a href="<%= older_url %>">Older →</a><% end %></nav></div>
-<p class="muted filter-help">Last <%= retention_days %> days, up to <%= max_rows %> metadata-only entries, plus the last ten detailed requests of each account regardless of age. Click a linked ID to view saved request/response bodies (up to 16 MiB each). Completion-order IDs, newest first; timestamps show request start in the server timezone.</p>
 <div class="scroll request-table" role="region" aria-label="Request history" tabindex="0"><table>
 <thead><tr><th scope="col">ID</th><th scope="col">Started</th><th scope="col">User</th><th scope="col">Channel</th><th scope="col">Model</th><th scope="col">Protocol</th><th scope="col">Result</th><th scope="col">Duration</th><th scope="col">TTFT</th><th scope="col">Tokens/s</th><th scope="col">Input</th><th scope="col">Cached input</th><th scope="col">Output</th></tr></thead>
 <tbody><% for _, row in ipairs(rows) do %>

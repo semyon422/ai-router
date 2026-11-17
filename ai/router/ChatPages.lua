@@ -21,6 +21,7 @@ local chat_dir = debug.getinfo(1, "S").source:match("^@?(.+)/[^/]+$") .. "/chat"
 ---@field server ai.router.Server
 ---@field get_time fun(): number
 ---@field stylesheet string
+---@field chat_stylesheet string
 ---@field theme_script string
 ---@field chat_script string
 ---@field templates {[string]: fun(env: table?): string}
@@ -46,14 +47,16 @@ function ChatPages:new(options)
 	-- to work. This secret signs web sessions; it no longer logs anyone in.
 	self.sessions = Sessions(ChatPages.cookie_name,
 		digest.hash("sha256", options.session_secret .. "\0ai-router-chat", true))
-	self.stylesheet = io_util.read_file(chat_dir .. "/chat.css")
-	self.theme_script = io_util.read_file(chat_dir .. "/theme.js")
+	self.dashboard_stylesheet = io_util.read_file(chat_dir .. "/../admin/dashboard.css")
+	self.stylesheet = self.dashboard_stylesheet
+	self.chat_stylesheet = io_util.read_file(chat_dir .. "/chat.css")
+	self.theme_script = io_util.read_file(chat_dir .. "/../admin/theme.js")
 	self.chat_script = io_util.read_file(chat_dir .. "/tools.js") .. "\n" .. io_util.read_file(chat_dir .. "/chat.js")
+		.. "\n" .. io_util.read_file(chat_dir .. "/settings.js")
 	self.templates = {}
 	self.templates.login = etlua.compile(io_util.read_file(chat_dir .. "/login.etlua"), "@chat/login")
 	self.templates.chat = etlua.compile(io_util.read_file(chat_dir .. "/chat.etlua"), "@chat/chat")
 	self.templates.layout = etlua.compile(io_util.read_file(chat_dir .. "/../admin/layout.etlua"), "@layout")
-	self.dashboard_stylesheet = io_util.read_file(chat_dir .. "/../admin/dashboard.css")
 end
 
 ---@param res web.Response
@@ -213,7 +216,7 @@ function ChatPages:renderChat(res, session, user)
 		title = "Chat", user = user,
 		content = self.templates.chat({models = models}),
 		csrf_token = session.csrf_token,
-		stylesheet = self.dashboard_stylesheet .. "\n" .. self.stylesheet,
+		stylesheet = self.dashboard_stylesheet .. "\n" .. self.chat_stylesheet,
 		theme_script = self.theme_script,
 		page_script = "window.routerChat = " .. config .. ";\n" .. self.chat_script,
 	}))

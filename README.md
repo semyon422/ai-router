@@ -16,6 +16,13 @@ inference details, and opt-in automatic JavaScript tools in a network-isolated
 browser sandbox. Tool execution is off after reload and bounded by time/step limits.
 The MCP management token remains separate.
 
+The workspace uses the Graphite + Cobalt design throughout sign-in, chat and
+administration. System / Light / Dark themes share the same tokens and saved
+preference. Body text is 16px, tables/controls 14px, and metadata at least 12px.
+Chat settings sit beside the conversation on wide screens and move into a native,
+keyboard-accessible dialog on narrow screens; resizing preserves the same controls
+and their current values. The composer stays visible while messages scroll.
+
 Dashboard URLs have no `/admin` prefix: `/overview`, `/channels`, `/usage`,
 `/requests`, `/models`, `/users`. Logout is `POST /logout` with CSRF protection.
 Old URLs are removed, with no compatibility redirects.
