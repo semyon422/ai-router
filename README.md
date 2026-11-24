@@ -11,7 +11,10 @@ Sign in at `/login` with your router API key. `/` is the shared Home page;
 metadata; admins also get the full dashboard and everyone's requests. Roles are
 managed through MCP (`router_create_user` / `router_update_user`, `role: user|admin`).
 Roles do not bypass inference model grants. Conversation text stays in your browser.
-Chat includes New chat, an editable system prompt, reasoning and sampling controls,
+Chat renders assistant replies as Markdown while keeping the original text in history.
+The parser loads asynchronously from jsDelivr with a pinned version and integrity
+hash; if it cannot load, the chat shows plain text.
+Chat also includes New chat, an editable system prompt, reasoning and sampling controls,
 per-response inference details, and opt-in automatic JavaScript tools in a network-isolated
 browser sandbox. Tool execution is off after reload and bounded by time/step limits.
 The MCP management token remains separate.
@@ -56,6 +59,8 @@ Native Responses objects and events remain unchanged.
    `bin/linux64/{libsqlite3.so,libssl.so.3,libcrypto.so.3}` (OpenSSL 3.5.7, SQLite 3.53.4)
    and `tree/` (luasocket/ssl). The entrypoint asserts exact versions.
 3. `./test` — headless test suite (system LuaJIT, no window or GPU needed).
+   For chat JavaScript tests: `npm --prefix ai/router/chat ci` and
+   `npm --prefix ai/router/chat test`. npm is not needed to run the router.
 4. `./luajit ai/router/proxy.lua [config_path]` — run the router locally; the default
    config is `userdata/ai_router.lua` (layout in `docker/ai-router-config.example.lua`).
 5. `./luajit ai/router/smoke.lua` — end-to-end smoke test against a local mock upstream.

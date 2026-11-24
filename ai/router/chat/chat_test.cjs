@@ -6,6 +6,8 @@ const {runInNewContext} = require('node:vm');
 const {setImmediate: settle} = require('node:timers/promises');
 
 const source = readFileSync(join(__dirname, 'chat.js'), 'utf8');
+const markdown = readFileSync(join(__dirname, 'markdown.js'), 'utf8');
+const markdownit = require('markdown-it');
 const samplingFields = Object.entries({temperature: [0, 2], top_p: [0, 1], frequency_penalty: [-2, 2], presence_penalty: [-2, 2],
 	top_k: [-1, '', '1'], min_p: [0, 1], repeat_penalty: [0, ''], seed: ['', '', '1']});
 const mixedModelInfo = {'zai-1/glm-5.3': {kind: 'zai'}, 'openai-1/gpt-6-luna': {kind: 'openai_compat'}};
@@ -18,6 +20,8 @@ function element(tag = 'div') {
 		children: [],
 		parentElement: null,
 		listeners: {},
+		style: {},
+		hasChildNodes: () => node.children.length > 0,
 		addEventListener: (name, callback) => { node.listeners[name] = callback; },
 		remove: () => { if (node.parentElement) node.parentElement.removeChild(node); },
 		replaceChildren: (...children) => {
@@ -44,7 +48,7 @@ function element(tag = 'div') {
 	return node;
 }
 
-function start(saved, {userId = 1, storage = {}, runJavaScript, modelInfo = {}, presentation = false} = {}) {
+function start(saved, {userId = 1, storage = {}, runJavaScript, modelInfo = {}, presentation = false, renderMarkdown = false} = {}) {
 	if (saved) storage['ai-router-chat:' + userId] = saved;
 	const elements = {
 		'chat-model': {
@@ -58,6 +62,9 @@ function start(saved, {userId = 1, storage = {}, runJavaScript, modelInfo = {}, 
 			...element('div'),
 			scrollTop: 0,
 			scrollHeight: 10,
+			querySelectorAll: () => elements['chat-messages'].children
+				.filter(node => node.className === 'msg assistant')
+				.flatMap(node => descendants(node, 'div').filter(child => child.className === 'content')),
 		},
 		'chat-input': {tag: 'textarea', value: '', disabled: false, listeners: {},
 			addEventListener: (name, callback) => { elements['chat-input'].listeners[name] = callback; }},
@@ -83,16 +90,22 @@ function start(saved, {userId = 1, storage = {}, runJavaScript, modelInfo = {}, 
 	const document = {
 		hidden: false,
 		getElementById: id => elements[id],
+		head: element('head'),
 		createElement: tag => element(tag),
+		createDocumentFragment: () => element('#fragment'),
+		createTextNode: text => Object.assign(element('#text'), {textContent: text}),
 	};
+	const events = new EventTarget();
 	const window = {
 		routerChat: {csrfToken: 'csrf-123', userId, model: 'zai-1/glm-5.3', modelInfo},
 		routerChatTools: {runJavaScript: runJavaScript || (async () => ({ok: true, output: '2'}))},
 		location: {},
-		addEventListener: () => {},
+		addEventListener: events.addEventListener.bind(events),
+		dispatchEvent: events.dispatchEvent.bind(events),
 	};
-	const requests = [];
-	runInNewContext(source, {
+	const requests = [], timers = new Map();
+	let timerId = 0;
+	const context = {
 		document,
 		window,
 		localStorage: {
@@ -107,9 +120,22 @@ function start(saved, {userId = 1, storage = {}, runJavaScript, modelInfo = {}, 
 		performance: {now: (() => { let time = 0; return () => time += 100; })()},
 		TextDecoder,
 		AbortController,
-	});
+		setTimeout: callback => { timers.set(++timerId, callback); return timerId; },
+		clearTimeout: id => timers.delete(id),
+	};
+	runInNewContext(markdown, {...context, URL, Event});
+	const markdownScript = document.head.children[0];
+	const loadMarkdown = () => {
+		window.markdownit = markdownit;
+		markdownScript.listeners.load();
+	};
+	if (renderMarkdown) loadMarkdown();
+	runInNewContext(source, context);
 	return {
 		elements,
+		markdownScript,
+		loadMarkdown,
+		timers,
 		requests,
 		storage,
 		contextWindow: window,
@@ -293,6 +319,86 @@ test('streams deltas incrementally and renders reasoning content', async () => {
 	assert.equal(body.children[0].children[1].textContent, 'Let me think…');
 	assert.equal(body.children[1].className, 'content');
 	assert.equal(body.children[1].textContent, 'Answer now.');
+});
+
+function descendants(node, tag) {
+	return node.children.flatMap(child => [...(child.tag === tag ? [child] : []), ...descendants(child, tag)]);
+}
+
+function textOf(node) {
+	return node.textContent + node.children.map(textOf).join('');
+}
+
+test('CDN loading is asynchronous and upgrades replies that arrived while the parser was unavailable', async () => {
+	const view = start();
+	const script = view.markdownScript;
+	assert.equal(script.src, 'https://cdn.jsdelivr.net/npm/markdown-it@15.0.3/dist/browser/markdown-it.umd.min.js');
+	assert.match(script.integrity, /^sha384-[A-Za-z0-9+/]{64}$/);
+	assert.equal(script.crossOrigin, 'anonymous');
+	assert.equal(script.referrerPolicy, 'no-referrer');
+	assert.equal(script.async, true);
+	view.elements['chat-input'].value = 'Hello'; view.send();
+	view.requests[0].resolve(sse(chunks('**Plain until loaded**'))); await drain();
+	const assistant = view.elements['chat-messages'].children[1];
+	const content = assistant.children[1].children[0];
+	assert.equal(content.textContent, '**Plain until loaded**');
+	assert.equal(content.className, 'content');
+	view.loadMarkdown();
+	assert.equal(content.className, 'content markdown');
+	assert.equal(textOf(descendants(content, 'strong')[0]), 'Plain until loaded');
+	assert.equal(JSON.parse(view.storage['ai-router-chat:1']).messages[1].content, '**Plain until loaded**');
+});
+
+test('renders Markdown incrementally and on restore without changing wire or stored text', async () => {
+	const view = start(null, {renderMarkdown: true});
+	view.elements['chat-input'].value = '**Literal user text**'; view.send();
+	const req = view.requests[0];
+	let deliver;
+	const frame = data => deliver({done: false, value: new TextEncoder().encode('data: ' + data + '\n\n')});
+	const delta = data => frame(JSON.stringify({choices: [{delta: data}]}));
+	req.resolve({ok: true, status: 200, body: {getReader: () => ({read: () => new Promise(resolve => { deliver = resolve; })})}});
+	await settle();
+	delta({reasoning_content: '*Literal reasoning*', content: '\n\n## Heading\n\n**Bo'}); await settle();
+	delta({content: 'ld**'}); await settle();
+	assert.equal(view.timers.size, 1);
+	for (const callback of [...view.timers.values()]) callback();
+	const bubbles = view.elements['chat-messages'].children;
+	assert.equal(descendants(bubbles[0], 'strong').length, 0);
+	assert.equal(textOf(descendants(bubbles[1], 'h2')[0]), 'Heading');
+	assert.equal(textOf(descendants(bubbles[1], 'strong')[0]), 'Bold');
+	assert.equal(descendants(bubbles[1], 'details')[0].children[1].textContent, '*Literal reasoning*');
+	delta({content: '\n\n```js\n  let x = 1;\n```'}); await settle();
+	frame('[DONE]'); await settle();
+	deliver({done: true}); await drain();
+	assert.equal(view.timers.size, 0);
+	assert.equal(textOf(descendants(bubbles[1], 'code')[0]), '  let x = 1;\n');
+	const raw = '\n\n## Heading\n\n**Bold**\n\n```js\n  let x = 1;\n```';
+	assert.equal(JSON.parse(view.storage['ai-router-chat:1']).messages[1].content, raw);
+	const restored = start(null, {renderMarkdown: true, storage: view.storage});
+	assert.equal(textOf(descendants(restored.elements['chat-messages'], 'strong')[0]), 'Bold');
+	restored.elements['chat-input'].value = 'Next'; restored.send();
+	assert.equal(JSON.parse(restored.requests[0].options.body).messages[1].content, raw);
+});
+
+test('Markdown renders tables, lists, quotes and safe links without active HTML or remote media', () => {
+	const view = start(null, {renderMarkdown: true});
+	const output = element();
+	view.contextWindow.routerChatMarkdown(output, [
+		'> Quote with *emphasis* and `code`', '', '3. item', '', '| Value |', '| ---: |', '| ~~old~~ |', '',
+		'[safe](https://example.com/docs) [relative](/chat) [scheme](java&#x73;cript:alert%281%29)', '',
+		'![Alt](https://example.com/tracker.png)', '', '<img src=x onerror=alert(1)><script>alert(1)</script>',
+	].join('\n'));
+	for (const tag of ['blockquote', 'em', 'code', 'table', 'li', 's']) assert.equal(descendants(output, tag).length, 1);
+	assert.equal(descendants(output, 'ol')[0].start, 3);
+	assert.equal(descendants(output, 'th')[0].style.textAlign, 'right');
+	const links = descendants(output, 'a');
+	assert.equal(links.length, 1);
+	assert.equal(links[0].href, 'https://example.com/docs');
+	assert.equal(links[0].rel, 'noopener noreferrer');
+	assert.equal(descendants(output, 'img').length, 0);
+	assert.equal(descendants(output, 'script').length, 0);
+	assert.match(textOf(output), /Alt.*<img src=x onerror=alert\(1\)><script>/);
+	assert.match(textOf(output), /safe relative/);
 });
 
 test('http errors surface the server message and keep the composer usable', async () => {

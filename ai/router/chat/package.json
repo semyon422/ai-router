@@ -1,0 +1,10 @@
+{
+  "name": "ai-router-chat-tests",
+  "private": true,
+  "scripts": {
+    "test": "node --test *_test.cjs"
+  },
+  "devDependencies": {
+    "markdown-it": "15.0.3"
+  }
+}

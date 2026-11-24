@@ -6,5 +6,6 @@ temp/
 luacov.stats.out
 lcov.info
 luacov.report.out
+/ai/router/chat/node_modules/
 .deploy.lock
 .handoff.md

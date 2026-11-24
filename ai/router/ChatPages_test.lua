@@ -253,6 +253,7 @@ function test.login_page_then_session_and_model_list(t)
 	local response = request(t, stack, "/login")
 	t:eq(response.status, 200)
 	t:assert(response.body:find("API key", 1, true))
+	t:eq(response.body:find("cdn.jsdelivr.net", 1, true), nil)
 	t:eq(response.body:find(TOKEN, 1, true), nil)
 
 	response = request(t, stack, "/login", {api_key = "wrong-key-wrong"})
@@ -638,6 +639,9 @@ function test.chat_settings_and_model_metadata_are_safe_and_grant_scoped(t)
 	for _, id in ipairs({"chat-reset", "chat-system", "chat-reasoning", "chat-tools", "chat-status"}) do
 		t:assert(response.body:find('id="' .. id .. '"', 1, true), id)
 	end
+	local markdown = response.body:find("https://cdn.jsdelivr.net/npm/markdown-it@", 1, true)
+	local chat = response.body:find("const updateAnswer =", 1, true)
+	t:assert(markdown and chat and markdown < chat, "Markdown loader is included before chat")
 	local config = json.decode(assert(response.body:match("window%.routerChat = ([^\n]+);")))
 	t:eq(config.modelInfo.lite.kind, "zai")
 	t:eq(config.modelInfo.lite.channel, "zai-1")

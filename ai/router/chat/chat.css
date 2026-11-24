@@ -23,6 +23,21 @@
 .reasoning-content { border-left: 2px solid var(--line); padding: 8px 0 8px 12px; margin-top: 8px; white-space: pre-wrap; line-height: 1.8; }
 .msg .content:empty { min-height: 1em; }
 .msg .content:empty::after { content: "…"; color: var(--muted); }
+.msg .markdown { white-space: normal; }
+.markdown :is(p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote, pre, hr, .markdown-table) { margin: 0 0 .9em; }
+.markdown :is(h1, h2, h3, h4, h5, h6) { font-size: 1.05em; line-height: 1.35; }
+.markdown h1 { font-size: 1.45em; }
+.markdown h2 { font-size: 1.25em; }
+.markdown :is(ul, ol) { padding-inline-start: 1.6em; }
+.markdown blockquote { padding-inline-start: 12px; border-inline-start: 3px solid var(--line); color: var(--muted); }
+.markdown hr { border: 0; border-top: 1px solid var(--line); }
+.markdown code { font: .9em/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; background: var(--raised); border-radius: 4px; padding: .1em .3em; white-space: break-spaces; }
+.markdown pre { overflow-x: auto; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--raised); }
+.markdown pre code { background: none; padding: 0; white-space: pre; }
+.markdown .markdown-table { overflow-x: auto; }
+.markdown table { width: auto; min-width: 100%; font-size: .875em; }
+.markdown :is(th, td) { border: 1px solid var(--line); }
+.markdown :is(ul, ol, li, blockquote) > :last-child, .markdown > :last-child { margin-bottom: 0; }
 .tool-call { margin-top: 12px; font-size: 14px; color: var(--muted); }
 .tool-code { max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--raised); border: 1px solid var(--line); border-radius: 7px; padding: 12px; font-size: 14px; }
 .msg.tool .content { font: 14px/1.8 ui-monospace, SFMono-Regular, Consolas, monospace; background: var(--panel); border: 1px dashed var(--line); border-radius: 7px; padding: 12px; }

@@ -51,7 +51,8 @@ function ChatPages:new(options)
 	self.stylesheet = self.dashboard_stylesheet
 	self.chat_stylesheet = io_util.read_file(chat_dir .. "/chat.css")
 	self.theme_script = io_util.read_file(chat_dir .. "/../admin/theme.js")
-	self.chat_script = io_util.read_file(chat_dir .. "/tools.js") .. "\n" .. io_util.read_file(chat_dir .. "/chat.js")
+	self.chat_script = io_util.read_file(chat_dir .. "/markdown.js")
+		.. "\n" .. io_util.read_file(chat_dir .. "/tools.js") .. "\n" .. io_util.read_file(chat_dir .. "/chat.js")
 		.. "\n" .. io_util.read_file(chat_dir .. "/settings.js")
 	self.templates = {}
 	self.templates.login = etlua.compile(io_util.read_file(chat_dir .. "/login.etlua"), "@chat/login")

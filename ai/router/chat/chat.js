@@ -69,12 +69,29 @@
 		if (text !== undefined) node.textContent = text;
 		return node;
 	};
+	const updateAnswer = (node, text) => {
+		const visible = visibleText(text), renderMarkdown = window.routerChatMarkdown;
+		if (renderMarkdown && visible) {
+			try {
+				if (renderMarkdown(node, visible)) { node.className = "content markdown"; return; }
+			} catch (_) { /* Keep the answer readable even if rendering fails. */ }
+		}
+		node.className = "content";
+		node.textContent = visible;
+	};
+	window.addEventListener("router-chat-markdown-ready", () => {
+		for (const node of messages.querySelectorAll(".msg.assistant .content:not(.markdown)")) {
+			if (!node.hidden) updateAnswer(node, node.textContent);
+		}
+	}, {once: true});
 	const addMessage = (role, text = "") => {
 		const empty = get("chat-empty");
 		if (empty) empty.hidden = true;
 		const node = element("div", "msg " + role);
 		const meta = element("div", "meta", role === "user" ? "You" : role === "tool" ? "JavaScript result" : "Assistant");
-		const body = element("div", "body"), content = element("div", "content", role === "assistant" ? visibleText(text) : text);
+		const body = element("div", "body"), content = element("div", "content");
+		if (role === "assistant") updateAnswer(content, text);
+		else content.textContent = text;
 		body.appendChild(content); node.appendChild(meta); node.appendChild(body); messages.appendChild(node); scroll();
 		return {node, body, content};
 	};
@@ -206,6 +223,14 @@
 		const stats = {model: turn.model, kind: info.kind, channel: info.channel, upstreamModel: info.upstreamModel,
 			startedAt: now(), endedAt: 0, firstAt: null, usage: null, finishReason: "", id: "", state: "receiving"};
 		let text = "", done = false, failed = false;
+		let answerTimer = null, renderedText = "";
+		const flushAnswer = () => {
+			if (answerTimer !== null) { clearTimeout(answerTimer); answerTimer = null; }
+			if (renderedText === text) return;
+			renderedText = text;
+			updateAnswer(bubble.content, text);
+			scroll();
+		};
 		const thoughts = {};
 		const calls = [];
 		const fail = message => { failed = true; errorLine.textContent = message; };
@@ -226,7 +251,9 @@
 			if (typeof delta.content === "string" && delta.content) {
 				output();
 				if (text.length + delta.content.length > maxContent) throw new Error("Reply exceeded the browser content limit.");
-				text += delta.content; bubble.content.textContent = visibleText(text);
+				text += delta.content;
+				if (!window.routerChatMarkdown) flushAnswer();
+				else if (answerTimer === null) answerTimer = setTimeout(flushAnswer, 100);
 			}
 			for (const field of reasoningFields) {
 				const value = delta[field];
@@ -290,6 +317,7 @@
 		} catch (error) {
 			if (!error || error.name !== "AbortError") fail(error && error.message || "Network error while receiving the reply.");
 		} finally {
+			flushAnswer();
 			if (reader && reader.cancel) { try { await reader.cancel(); } catch (_) {} }
 			stats.endedAt = now(); stats.state = turn.controller.signal.aborted ? "stopped" : failed ? "failed" : "complete";
 			updateStats(bubble, stats);
