@@ -246,7 +246,7 @@ function test.compat_provider_forwards_body_verbatim(t)
 
 	local message = provider:complete(requestBody([[
 		{"model": "llama-70b", "messages": [{"role": "user", "content": "hi"}],
-		 "temperature": 0.7, "top_k": 40}
+		 "temperature": 0.7, "top_k": 40, "min_p": 0.05, "repeat_penalty": 1.1, "seed": 0}
 	]]), "llama-70b")
 	t:eq(message.content, "hi")
 	t:eq(message.usage.input_tokens, 4)
@@ -257,6 +257,9 @@ function test.compat_provider_forwards_body_verbatim(t)
 	t:eq(upstream.model, "llama-70b")
 	t:eq(upstream.temperature, 0.7)
 	t:eq(upstream.top_k, 40)
+	t:eq(upstream.min_p, 0.05)
+	t:eq(upstream.repeat_penalty, 1.1)
+	t:eq(upstream.seed, 0)
 end
 
 ---@param t testing.T

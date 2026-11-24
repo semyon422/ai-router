@@ -32,6 +32,26 @@
 <% if #models == 0 then %><p class="muted">Ask your operator to grant you a model on a GLM or compatible channel.</p><% end %>
 </div>
 <div class="chat-setting"><label for="chat-reasoning">Reasoning</label><select id="chat-reasoning"><option value="default">Provider default</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select><p id="chat-reasoning-hint" class="muted"></p></div>
+<div class="chat-setting" role="group" aria-labelledby="chat-sampling-title" aria-describedby="chat-sampling-hint">
+<h3 id="chat-sampling-title">Sampling</h3>
+<p id="chat-sampling-hint" class="muted">Leave fields blank to use provider defaults. Support and limits may vary by model.</p>
+<div class="chat-sampling-fields">
+<label>Temperature<input id="chat-temperature" type="number" min="0" max="2" step="any" placeholder="Default"></label>
+<label>Top P<input id="chat-top_p" type="number" min="0" max="1" step="any" placeholder="Default"></label>
+<label>Frequency penalty<input id="chat-frequency_penalty" type="number" min="-2" max="2" step="any" placeholder="Default"></label>
+<label>Presence penalty<input id="chat-presence_penalty" type="number" min="-2" max="2" step="any" placeholder="Default"></label>
+</div>
+<details id="chat-sampling-advanced" class="chat-sampling-advanced" hidden open>
+<summary>Advanced sampling</summary>
+<p class="muted">OpenAI-compatible servers only. Some servers may ignore or reject these settings.</p>
+<div class="chat-sampling-fields">
+<label>Top K<input id="chat-top_k" type="number" min="-1" step="1" placeholder="Default"></label>
+<label>Min P<input id="chat-min_p" type="number" min="0" max="1" step="any" placeholder="Default"></label>
+<label>Repeat penalty<input id="chat-repeat_penalty" type="number" min="0" step="any" placeholder="Default"></label>
+<label>Seed<input id="chat-seed" type="number" step="1" placeholder="Default"></label>
+</div>
+</details>
+</div>
 <div class="chat-setting"><label for="chat-system">System prompt</label><textarea id="chat-system" rows="4" maxlength="100000" placeholder="Instructions sent before the conversation"></textarea><p class="muted">Changes apply to subsequent requests. New chat keeps these settings.</p></div>
 <div class="chat-setting"><label class="chat-tool-toggle"><span>JavaScript tools</span><input id="chat-tools" type="checkbox"></label><p class="muted">Off after every reload. Outputs are sent back to the model.</p><details class="chat-tool-help"><summary>Sandbox &amp; execution limits</summary><p>JavaScript runs in an isolated worker: no page DOM, credentials, storage, or network. Five seconds per call, four calls per step, six inference requests per turn. There is no browser memory quota; only enable it for sessions you trust.</p></details></div>
 </aside>

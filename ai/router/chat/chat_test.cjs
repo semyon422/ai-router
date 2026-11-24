@@ -6,6 +6,9 @@ const {runInNewContext} = require('node:vm');
 const {setImmediate: settle} = require('node:timers/promises');
 
 const source = readFileSync(join(__dirname, 'chat.js'), 'utf8');
+const samplingFields = Object.entries({temperature: [0, 2], top_p: [0, 1], frequency_penalty: [-2, 2], presence_penalty: [-2, 2],
+	top_k: [-1, '', '1'], min_p: [0, 1], repeat_penalty: [0, ''], seed: ['', '', '1']});
+const mixedModelInfo = {'zai-1/glm-5.3': {kind: 'zai'}, 'openai-1/gpt-6-luna': {kind: 'openai_compat'}};
 
 function element(tag = 'div') {
 	const node = {
@@ -67,7 +70,11 @@ function start(saved, {userId = 1, storage = {}, runJavaScript, modelInfo = {}, 
 		'chat-tools': {...element('input'), checked: false},
 		'chat-status': element('p'),
 		'chat-reasoning-hint': element('p'),
+		'chat-sampling-advanced': {...element('details'), hidden: true},
 	};
+	for (const [field, [min, max, step = 'any']] of samplingFields) {
+		elements['chat-' + field] = {...element('input'), value: '', min: String(min), max: String(max), step, validity: {badInput: false}};
+	}
 	if (presentation) {
 		elements['chat-empty'] = element('div');
 		elements['chat-model-label'] = element('p');
@@ -494,6 +501,104 @@ test('system prompt and reasoning settings are account-scoped and editable betwe
 	assert.equal(start(null, {userId: 2, storage: view.storage}).elements['chat-system'].value, '');
 });
 
+test('sampling sends numbers (including zero) and omits cleared fields; settings survive reload and New chat', async () => {
+	const view = start();
+	const values = {temperature: 0, top_p: 0.95, frequency_penalty: -0.5, presence_penalty: 2};
+	for (const [field, value] of Object.entries(values)) {
+		const control = view.elements['chat-' + field];
+		control.value = String(value); control.listeners.input();
+	}
+	assert.deepEqual(JSON.parse(view.storage['ai-router-chat:1']).settings.sampling, values);
+	const restored = start(null, {storage: view.storage});
+	const other = start(null, {storage: view.storage, userId: 2});
+	restored.elements['chat-reset'].listeners.click();
+	restored.elements['chat-input'].value = 'Sample'; restored.send();
+	const body = JSON.parse(restored.requests[0].options.body);
+	for (const [field, value] of Object.entries(values)) {
+		assert.equal(other.elements['chat-' + field].value, '');
+		assert.equal(body[field], value);
+		assert.equal(restored.elements['chat-' + field].disabled, true);
+	}
+	restored.requests[0].resolve(sse(chunks('Done'))); await drain();
+	const temperature = restored.elements['chat-temperature'];
+	assert.equal(temperature.disabled, false);
+	temperature.value = ''; temperature.listeners.input();
+	assert.equal(start(null, {storage: view.storage}).elements['chat-temperature'].value, '');
+	restored.elements['chat-input'].value = 'Again'; restored.send();
+	assert.equal('temperature' in JSON.parse(restored.requests[1].options.body), false);
+});
+
+test('invalid sampling blocks sending without losing the draft', () => {
+	const view = start();
+	const input = view.elements['chat-input'], topP = view.elements['chat-top_p'];
+	input.value = 'Keep this draft';
+	topP.value = '1.1'; view.send();
+	assert.match(view.elements['chat-error'].textContent, /top_p.*between 0 and 1/);
+	topP.value = ''; topP.validity.badInput = true; view.send();
+	assert.match(view.elements['chat-error'].textContent, /top_p/);
+	assert.equal(view.requests.length, 0);
+	assert.equal(view.elements['chat-messages'].children.length, 0);
+	assert.equal(input.value, 'Keep this draft');
+	topP.validity.badInput = false; view.send();
+	assert.equal(view.elements['chat-error'].textContent, '');
+	const body = JSON.parse(view.requests[0].options.body);
+	for (const [field] of samplingFields) assert.equal(field in body, false);
+});
+
+test('invalid stored sampling is ignored without losing valid values', () => {
+	const view = start(JSON.stringify({settings: {sampling: {temperature: 3, top_p: '0.8', frequency_penalty: null, presence_penalty: -2, model: 'other'}}}));
+	view.elements['chat-input'].value = 'Sample'; view.send();
+	const body = JSON.parse(view.requests[0].options.body);
+	assert.equal(body.presence_penalty, -2);
+	assert.equal(body.model, 'zai-1/glm-5.3');
+	for (const field of ['temperature', 'top_p', 'frequency_penalty']) assert.equal(field in body, false);
+});
+
+test('advanced sampling is sent only to compatible channels and retained when switching models', async () => {
+	const view = start(null, {modelInfo: mixedModelInfo});
+	const {elements} = view;
+	const advanced = elements['chat-sampling-advanced'], model = elements['chat-model'];
+	const values = {top_k: -1, min_p: 0, repeat_penalty: 1.15, seed: 0};
+	assert.equal(advanced.hidden, true);
+	model.value = 'openai-1/gpt-6-luna'; view.modelChange();
+	assert.equal(advanced.hidden, false);
+	for (const [field, value] of Object.entries(values)) elements['chat-' + field].value = String(value);
+	elements['chat-input'].value = 'Compatible'; view.send();
+	const compatible = JSON.parse(view.requests[0].options.body);
+	for (const [field, value] of Object.entries(values)) assert.equal(compatible[field], value);
+	view.requests[0].resolve(sse(chunks('Done'))); await drain();
+	model.value = 'zai-1/glm-5.3'; view.modelChange();
+	assert.equal(advanced.hidden, true);
+	elements['chat-input'].value = 'Z.ai'; view.send();
+	const zai = JSON.parse(view.requests[1].options.body);
+	for (const field of Object.keys(values)) assert.equal(field in zai, false);
+	view.requests[1].resolve(sse(chunks('Done'))); await drain();
+	const restored = start(null, {storage: view.storage, modelInfo: mixedModelInfo});
+	restored.elements['chat-model'].value = 'openai-1/gpt-6-luna'; restored.modelChange();
+	assert.equal(restored.elements['chat-sampling-advanced'].hidden, false);
+	for (const [field, value] of Object.entries(values)) assert.equal(restored.elements['chat-' + field].value, String(value));
+});
+
+test('advanced settings reject out-of-range values and unsafe integers only when applicable', () => {
+	const view = start(null, {modelInfo: mixedModelInfo});
+	view.elements['chat-model'].value = 'openai-1/gpt-6-luna'; view.modelChange();
+	view.elements['chat-input'].value = 'Keep this draft';
+	for (const [field, value] of [['top_k', '-2'], ['top_k', '2.5'], ['min_p', '-0.1'], ['min_p', '1.1'],
+		['repeat_penalty', '0'], ['seed', '2.5'], ['seed', '9007199254740992']]) {
+		const control = view.elements['chat-' + field];
+		control.value = value; view.send();
+		assert.ok(view.elements['chat-error'].textContent.includes(field));
+		assert.equal(view.requests.length, 0);
+		control.value = '';
+	}
+	assert.equal(view.elements['chat-input'].value, 'Keep this draft');
+	view.elements['chat-seed'].value = '2.5';
+	view.elements['chat-model'].value = 'zai-1/glm-5.3'; view.modelChange();
+	view.send();
+	assert.equal('seed' in JSON.parse(view.requests[0].options.body), false);
+	assert.equal(view.elements['chat-error'].textContent, '');
+});
+
 test('compatible thinking overrides use template kwargs and default sends no override', async () => {
 	const view = start();
 	view.elements['chat-reasoning'].value = 'enabled';
@@ -549,11 +654,14 @@ test('automatic tools assemble deltas and send results back in a bounded native 
 	const executed = [];
 	const view = start(null, {runJavaScript: async code => { executed.push(code); return {ok: true, output: '2'}; }});
 	view.elements['chat-tools'].checked = true;
+	view.elements['chat-top_p'].value = '0.75';
 	view.elements['chat-input'].value = 'Calculate'; view.send();
 	assert.equal(JSON.parse(view.requests[0].options.body).tools[0].function.name, 'browser_javascript');
+	assert.equal(JSON.parse(view.requests[0].options.body).top_p, 0.75);
 	view.requests[0].resolve(sse(toolChunks())); await drain();
 	assert.deepEqual(executed, ['return 1 + 1']); assert.equal(view.requests.length, 2);
 	const body = JSON.parse(view.requests[1].options.body);
+	assert.equal(body.top_p, 0.75);
 	assert.equal(body.messages[1].role, 'assistant');
 	assert.equal(body.messages[1].tool_calls[0].id, 'call-1');
 	assert.equal(body.messages[2].role, 'tool'); assert.equal(body.messages[2].tool_call_id, 'call-1');

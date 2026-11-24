@@ -5,7 +5,14 @@
 	const send = get("chat-send"), errorLine = get("chat-error"), reset = get("chat-reset");
 	const system = get("chat-system"), reasoning = get("chat-reasoning"), tools = get("chat-tools");
 	const status = get("chat-status"), reasoningHint = get("chat-reasoning-hint");
-	if (!config || !model || !messages || !input || !send || !errorLine || !reset || !system || !reasoning || !tools || !status) return;
+	const advancedSampling = get("chat-sampling-advanced");
+	const advancedFields = ["top_k", "min_p", "repeat_penalty", "seed"];
+	const samplingControls = ["temperature", "top_p", "frequency_penalty", "presence_penalty", ...advancedFields]
+		.map(name => [name, get("chat-" + name)]);
+	if (!config || !model || !messages || !input || !send || !errorLine || !reset || !system || !reasoning || !tools || !status
+		|| !advancedSampling || samplingControls.some(([, control]) => !control)) return;
+	const currentModelInfo = () => (config.modelInfo || {})[model.value];
+	const supportsAdvancedSampling = () => currentModelInfo()?.kind === "openai_compat";
 	const storageKey = "ai-router-chat:" + config.userId;
 	const maxMessages = 100, maxContent = 100000, maxSteps = 6, maxTools = 4;
 	const options = [...model.options].map(option => option.value).filter(Boolean);
@@ -26,9 +33,32 @@
 		history = history.slice(-maxMessages);
 		while (history.length && history[0].role !== "user") history.shift();
 	};
+	const samplingConstraint = (name, control, value) => {
+		if (name === "repeat_penalty" && (!Number.isFinite(value) || value <= 0)) return "a positive number";
+		if (control.step === "1" && !Number.isSafeInteger(value)) return "an integer within the safe numeric range";
+		if (!Number.isFinite(value) || (control.min !== "" && value < Number(control.min))
+			|| (control.max !== "" && value > Number(control.max))) {
+			return control.max === "" ? "at least " + control.min : "between " + control.min + " and " + control.max;
+		}
+		return "";
+	};
+	const readSampling = (includeAdvanced = true) => {
+		const values = {};
+		let error = "";
+		for (const [name, control] of samplingControls) {
+			if (!includeAdvanced && advancedFields.includes(name)) continue;
+			if (!control.validity.badInput && control.value === "") continue;
+			const value = control.validity.badInput ? NaN : Number(control.value);
+			const constraint = samplingConstraint(name, control, value);
+			if (constraint) {
+				if (!error) error = "Sampling: " + name + " must be " + constraint + ", or left blank.";
+			} else values[name] = value;
+		}
+		return {values, error};
+	};
 	const save = () => {
 		try { localStorage.setItem(storageKey, JSON.stringify({version: 2, model: model.value,
-			settings: {systemPrompt: system.value.slice(0, maxContent), reasoning: reasoning.value}, messages: history})); }
+			settings: {systemPrompt: system.value.slice(0, maxContent), reasoning: reasoning.value, sampling: readSampling().values}, messages: history})); }
 		catch (_) { /* The page still works without browser storage. */ }
 	};
 	const appendHistory = item => { history.push(item); trimHistory(); save(); };
@@ -109,13 +139,15 @@
 		send.disabled = !model.value; send.textContent = busy ? "Stop" : "Send";
 		input.disabled = busy || !model.value;
 		for (const control of [model, reset, system, reasoning, tools]) control.disabled = busy;
+		for (const [, control] of samplingControls) control.disabled = busy;
 		model.disabled = busy || options.length === 0;
 	};
 	const hint = () => {
 		const label = get("chat-model-label");
 		if (label) label.textContent = model.value || "No models available";
+		advancedSampling.hidden = !supportsAdvancedSampling();
 		if (!reasoningHint) return;
-		const info = (config.modelInfo || {})[model.value];
+		const info = currentModelInfo();
 		reasoningHint.textContent = info && info.kind === "zai"
 			? "Reasoning mode uses Z.ai thinking.type. Only reasoning returned by the provider can be displayed."
 			: "Reasoning mode uses chat_template_kwargs.enable_thinking. Compatible servers may ignore or reject it; Provider default sends no override.";
@@ -128,6 +160,10 @@
 		if (options.includes(saved.model)) model.value = saved.model;
 		if (saved.settings && typeof saved.settings.systemPrompt === "string") system.value = saved.settings.systemPrompt.slice(0, maxContent);
 		if (saved.settings && modes.includes(saved.settings.reasoning)) reasoning.value = saved.settings.reasoning;
+		const sampling = saved.settings && saved.settings.sampling;
+		if (sampling) for (const [name, control] of samplingControls) {
+			if (!samplingConstraint(name, control, sampling[name])) control.value = String(sampling[name]);
+		}
 		if (!Array.isArray(saved.messages)) return;
 		let pending = [];
 		for (const raw of saved.messages.slice(-maxMessages)) {
@@ -215,7 +251,8 @@
 			}
 			stats.endedAt = now(); updateStats(bubble, stats); scroll();
 		};
-		const body = {model: turn.model, messages: history.map(item => ({...item})), stream: true, stream_options: {include_usage: true}};
+		const body = {model: turn.model, messages: history.map(item => ({...item})), stream: true,
+			stream_options: {include_usage: true}, ...turn.sampling};
 		if (turn.systemPrompt) body.messages.unshift({role: "system", content: turn.systemPrompt});
 		if (turn.reasoning !== "default") {
 			if (info.kind === "zai") body.thinking = {type: turn.reasoning};
@@ -277,8 +314,10 @@
 	const run = async () => {
 		const text = input.value.trim().slice(0, maxContent);
 		if (!text || !model.value || active) return;
+		const sampling = readSampling(supportsAdvancedSampling());
+		if (sampling.error) { errorLine.textContent = sampling.error; return; }
 		const turn = {controller: new AbortController(), model: model.value, systemPrompt: system.value.slice(0, maxContent),
-			reasoning: modes.includes(reasoning.value) ? reasoning.value : "default", tools: tools.checked};
+			reasoning: modes.includes(reasoning.value) ? reasoning.value : "default", tools: tools.checked, sampling: sampling.values};
 		active = turn; errorLine.textContent = ""; input.value = "";
 		appendHistory({role: "user", content: text}); addMessage("user", text); setBusy(true);
 		let count = 0, toolCount = 0;
@@ -327,5 +366,6 @@
 	});
 	model.addEventListener("change", () => { hint(); save(); });
 	system.addEventListener("input", save); reasoning.addEventListener("change", save);
+	for (const [, control] of samplingControls) control.addEventListener("input", save);
 	restore(); hint(); setBusy(false);
 })();

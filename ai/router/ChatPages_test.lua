@@ -302,7 +302,9 @@ function test.workspace_uses_shared_theme_and_single_accessible_settings_panel(t
 		'id="chat-empty"', 'id="chat-model-label"', 'id="chat-input" rows="2" aria-label="Message"'}) do
 		t:assert(response.body:find(text, 1, true), text)
 	end
-	for _, id in ipairs({"chat-model", "chat-system", "chat-reasoning", "chat-tools"}) do
+	for _, id in ipairs({"chat-model", "chat-system", "chat-reasoning", "chat-tools",
+		"chat-temperature", "chat-top_p", "chat-frequency_penalty", "chat-presence_penalty",
+		"chat-sampling-advanced", "chat-top_k", "chat-min_p", "chat-repeat_penalty", "chat-seed"}) do
 		local _, count = response.body:gsub('id="' .. id:gsub("%-", "%%-") .. '"', "")
 		t:eq(count, 1)
 	end
